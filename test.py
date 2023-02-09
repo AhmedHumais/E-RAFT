@@ -8,6 +8,8 @@ import utils.helper_functions as helper
 import utils.logger as logger
 from utils import image_utils
 
+import time
+
 class Test(object):
     """
     Test class
@@ -77,13 +79,18 @@ class Test(object):
             The validation metrics in log must have the key 'val_metrics'.
         """
         self.model.eval()
+        total_t = 0
+        total_samples = 0
         with torch.no_grad():
             for batch_idx, batch in enumerate(self.data_loader):
                 # Move Data to GPU
                 if next(self.model.parameters()).is_cuda:
                     batch = self.move_batch_to_cuda(batch)
                 # Network Forward Pass
+                batch_st_time = time.time()
                 self.run_network(batch)
+                total_t = total_t + (time.time() - batch_st_time)
+                total_samples = total_samples + len(batch)
                 print("Sample {}/{}".format(batch_idx + 1, len(self.data_loader)))
 
                 # Visualize
@@ -94,7 +101,8 @@ class Test(object):
                     # DSEC Special Snowflake
                     self.visualize_sample_dsec(batch, batch_idx)
                     #print('Not Visualizing')
-
+        print("total time: %s" %(total_t))
+        print("time per sample: %s" %(total_t/total_samples))
         # Log Generation
         log = {}
 
@@ -191,9 +199,11 @@ class TestRaftEventsWarm(Test):
             else:
                 im1 = torch.nn.functional.interpolate(batch[l]['event_volume_old'], scale_factor=0.5)
                 im2 = torch.nn.functional.interpolate(batch[l]['event_volume_new'], scale_factor=0.5)
+            # start_time = time.time()
             flow_low_res, batch[l]['flow_list'] = self.model(image1=im1,
                                                                 image2=im2,
                                                                 flow_init=self.flow_init)
+            # print("single pred time %s" %(time.time()- start_time))
 
         batch[l]['flow_est'] = batch[l]['flow_list'][-1]
         self.flow_init = image_utils.forward_interpolate_pytorch(flow_low_res)
