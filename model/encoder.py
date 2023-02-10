@@ -2,19 +2,21 @@
 import torch.nn as nn
 from torch_geometric.nn import SplineConv
 from torch_geometric.transforms import Cartesian
-from maxpooling import MaxPooling, MaxPoolingX
+from .maxpooling import MaxPooling, MaxPoolingX
+
+# TODO: find the difference between batchnorm and instance norm and if we need it for context and feature networks
 
 class GraphEncoder(nn.Module):
 
     def __init__(
-            self, 
+            self, output_dim=256, 
             n_feature=4
             ) -> None:
         super().__init__()
 
         pseudo = Cartesian(norm=True, cat=False)
 
-        self.conv1 = SplineConv(4, 32, dim=3, kernel_size=2)
+        self.conv1 = SplineConv(n_feature, 32, dim=3, kernel_size=2)
         self.norm1 = nn.BatchNorm1d(32)
 
         self.conv2 = SplineConv(32, 64, dim=3, kernel_size=2)
@@ -31,16 +33,16 @@ class GraphEncoder(nn.Module):
         self.conv5 = SplineConv(64, 128, dim=3, kernel_size=2)
         self.norm5 = nn.BatchNorm1d(128)
 
-        self.conv6 = SplineConv(128, 256, dim=3, kernel_size=2)
-        self.norm6 = nn.BatchNorm1d(256)
+        self.conv6 = SplineConv(128, output_dim, dim=3, kernel_size=2)
+        self.norm6 = nn.BatchNorm1d(output_dim)
         
 
     def forward(self, in_data):
         
+        out = []
         is_list = isinstance(in_data, tuple) or isinstance(in_data, list)
         if is_list:
             
-            out = []
             for data in in_data:
                 data.x = nn.functional.elu(self.conv1(data.x, data.edge_index, data.edge_attr))
                 data.x = self.norm1(data.x)
@@ -62,6 +64,7 @@ class GraphEncoder(nn.Module):
                 data.x = nn.functional.elu(self.conv6(data.x, data.edge_index, data.edge_attr))
                 data.x = self.norm6(data.x)
                 out.append(data)
+                print('run')
         else:
             data = in_data
             data.x = nn.functional.elu(self.conv1(data.x, data.edge_index, data.edge_attr))
@@ -84,5 +87,5 @@ class GraphEncoder(nn.Module):
             data.x = nn.functional.elu(self.conv6(data.x, data.edge_index, data.edge_attr))
             data.x = self.norm6(data.x)
             out = data            
-
+        # print(out)
         return out

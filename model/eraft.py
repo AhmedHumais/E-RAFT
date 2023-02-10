@@ -49,6 +49,7 @@ class ERAFT(nn.Module):
         self.context_dim = cdim = 128
         args.corr_levels = 4
         args.corr_radius = 4
+        args.corr_volumes = 4
 
         # feature network, context network, and update block
         self.fnet = BasicEncoder(output_dim=256, norm_fn='instance', dropout=0,

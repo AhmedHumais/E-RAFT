@@ -1,6 +1,6 @@
 import torch
 import torch.nn.functional as F
-from utils.utils import bilinear_sampler, coords_grid
+from model.utils import bilinear_sampler, coords_grid
 import numpy as np
 try:
     import alt_cuda_corr
@@ -8,9 +8,10 @@ except:
     # alt_cuda_corr is not compiled
     pass
 
+# TODO: find a better way to deal with batch stuff in graph2fmap
 
 class CorrGraph:
-    def __init__(self, graphs_list, num_levels=4, radius=4):
+    def __init__(self,imsz, graphs_list, num_levels=4, radius=4):
         self.num_levels = num_levels
         self.num_corr_volumes = len(graphs_list)-1
         self.radius = radius
@@ -19,12 +20,8 @@ class CorrGraph:
         corr_pyramid = []
         # all pairs correlation
         for j in range(self.num_corr_volumes):
-            fmap1 = CorrGraph.graph2fmap(graphs_list[j])
-            fmap2 = CorrGraph.graph2fmap(graphs_list[j+1])
-
-            # for batch stuff we add batch dimension, may need to change later for batch training and modify graph2fmap function
-            fmap1 = torch.unsqueeze(fmap1, dim=0)
-            fmap2 = torch.unsqueeze(fmap2, dim=0)
+            fmap1 = CorrGraph.graph2fmap(imsz, graphs_list[j])
+            fmap2 = CorrGraph.graph2fmap(imsz, graphs_list[j+1])
                        
             corr = CorrGraph.corr(fmap1, fmap2)
             
@@ -60,22 +57,27 @@ class CorrGraph:
                 corr = corr.view(batch, h1, w1, -1)
                 out_pyramid.append(corr)
 
-            out = torch.cat(out_pyramid, dim=-1)
+            out_list.append(torch.cat(out_pyramid, dim=-1))
             
-            out_list.append(out.permute(0, 3, 1, 2).contiguous().float())
+        out = torch.cat(out_list, dim=-1)
         
-        return torch.stack(out_list, dim=0)
+        return out.permute(0, 3, 1, 2).contiguous().float()
     
     @staticmethod
-    def graph2fmap(graph):
-        fmap = np.zeros((graph.x.shape[1], graph.y.shape[1], graph.y.shape[2]))
-        for i in range(graph.x.shape[0]):
-            fmap[:,int(graph.pos[i,2]), int(graph.pos[i,1])] = graph.x[i,:]
+    def graph2fmap(im_size,graph_batch):
+        fmap = np.zeros((1, graph_batch.x.shape[1], im_size[0], im_size[1]))
+        fmap = torch.Tensor(fmap).cuda()
+        for i in range(graph_batch.x.shape[0]):
+            fmap[0,:,int(graph_batch.pos[i,2]), int(graph_batch.pos[i,1])] = graph_batch.x[i,:]
 
-        return torch.Tensor(fmap)            
+        return torch.Tensor(fmap)          
 
     @staticmethod
     def corr(fmap1, fmap2):
+        
+        print(fmap1.shape)
+        print(fmap2.shape)
+        
         batch, dim, ht, wd = fmap1.shape
         fmap1 = fmap1.view(batch, dim, ht*wd)
         fmap2 = fmap2.view(batch, dim, ht*wd) 
