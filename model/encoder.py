@@ -2,7 +2,7 @@
 import torch.nn as nn
 from torch_geometric.nn import SplineConv
 from torch_geometric.transforms import Cartesian
-from .maxpooling import MaxPooling, MaxPoolingX
+from .maxpooling import MaxPooling, MaxPoolingX, MaxPooling2
 
 # TODO: find the difference between batchnorm and instance norm and if we need it for context and feature networks
 
@@ -21,14 +21,15 @@ class GraphEncoder(nn.Module):
 
         self.conv2 = SplineConv(32, 64, dim=3, kernel_size=2)
         self.norm2 = nn.BatchNorm1d(64)
-        self.pool2 = MaxPooling((4, 3), transform=pseudo)
+        self.pool2 = MaxPooling2(2, transform=pseudo)
 
         self.conv3 = SplineConv(64, 64, dim=3, kernel_size=2)
         self.norm3 = nn.BatchNorm1d(64)
+        self.pool3 = MaxPooling2(2, transform=pseudo)
         
         self.conv4 = SplineConv(64, 64, dim=3, kernel_size=2)
         self.norm4 = nn.BatchNorm1d(64)
-        self.pool4 = MaxPooling((16, 12), transform=pseudo)
+        self.pool4 = MaxPooling2(2, transform=pseudo)
 
         self.conv5 = SplineConv(64, 128, dim=3, kernel_size=2)
         self.norm5 = nn.BatchNorm1d(128)
@@ -49,14 +50,16 @@ class GraphEncoder(nn.Module):
 
                 data.x = nn.functional.elu(self.conv2(data.x, data.edge_index, data.edge_attr))
                 data.x = self.norm2(data.x)
-                data = self.pool2(data.x, pos=data.pos, batch=data.batch, edge_index=data.edge_index, return_data_obj=True)
+                data = self.pool2(data, return_data_obj=True)
 
                 data.x = nn.functional.elu(self.conv3(data.x, data.edge_index, data.edge_attr))
                 data.x = self.norm3(data.x)
+                data = self.pool3(data, return_data_obj=True)
+
 
                 data.x = nn.functional.elu(self.conv4(data.x, data.edge_index, data.edge_attr))
                 data.x = self.norm4(data.x)
-                data = self.pool4(data.x, pos=data.pos, batch=data.batch, edge_index=data.edge_index, return_data_obj=True)
+                data = self.pool4(data, return_data_obj=True)
 
                 data.x = nn.functional.elu(self.conv5(data.x, data.edge_index, data.edge_attr))
                 data.x = self.norm5(data.x)
@@ -72,14 +75,15 @@ class GraphEncoder(nn.Module):
 
             data.x = nn.functional.elu(self.conv2(data.x, data.edge_index, data.edge_attr))
             data.x = self.norm2(data.x)
-            data = self.pool2(data.x, pos=data.pos, batch=data.batch, edge_index=data.edge_index, return_data_obj=True)
+            data = self.pool2(data, return_data_obj=True)
 
             data.x = nn.functional.elu(self.conv3(data.x, data.edge_index, data.edge_attr))
             data.x = self.norm3(data.x)
+            data = self.pool3(data, return_data_obj=True)
 
             data.x = nn.functional.elu(self.conv4(data.x, data.edge_index, data.edge_attr))
             data.x = self.norm4(data.x)
-            data = self.pool4(data.x, pos=data.pos, batch=data.batch, edge_index=data.edge_index, return_data_obj=True)
+            data = self.pool4(data, return_data_obj=True)
 
             data.x = nn.functional.elu(self.conv5(data.x, data.edge_index, data.edge_attr))
             data.x = self.norm5(data.x)

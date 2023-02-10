@@ -68,7 +68,10 @@ class CorrGraph:
         fmap = np.zeros((1, graph_batch.x.shape[1], im_size[0], im_size[1]))
         fmap = torch.Tensor(fmap).cuda()
         for i in range(graph_batch.x.shape[0]):
-            fmap[0,:,int(graph_batch.pos[i,2]), int(graph_batch.pos[i,1])] = graph_batch.x[i,:]
+            if graph_batch.pos[i,2] >= im_size[0] or graph_batch.pos[i,1] >= im_size[1]:
+                continue
+            else:
+                fmap[0,:,int(graph_batch.pos[i,2]), int(graph_batch.pos[i,1])] = graph_batch.x[i,:]
 
         return torch.Tensor(fmap)          
 

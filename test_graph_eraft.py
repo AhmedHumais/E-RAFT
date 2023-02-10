@@ -11,6 +11,8 @@ from torch_geometric.transforms import Cartesian
 from tqdm.auto import tqdm
 from model import eraftv2
 
+from utils.visualization import visualize_optical_flow
+
 def make_graph(ev_arr, gt, beta=0.5e4):
     ts_sample = ev_arr[:, 3] - ev_arr[0, 3]
     ts_sample = torch.tensor(ts_sample*beta).float().reshape(-1, 1)
@@ -86,3 +88,7 @@ for it in data:
     it = it.cuda()
     
 flow, flow_list = model(data)
+
+visualize_optical_flow(flow_list[-1].squeeze(dim=0))
+# print(flow.shape)
+# print(flow_list)

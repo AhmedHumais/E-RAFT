@@ -48,7 +48,7 @@ class ERAFT(nn.Module):
         self.context_dim = cdim = 128
         args.corr_levels = 4
         args.corr_radius = 4
-        args.corr_volumes = 1
+        args.corr_volumes = 3
 
         # feature network, context network, and update block
         self.fnet = GraphEncoder(output_dim= 256, n_feature= n_first_channels)        
@@ -99,13 +99,13 @@ class ERAFT(nn.Module):
 
         hdim = self.hidden_dim
         cdim = self.context_dim
-        im_ht = graph_list[0].y.shape[1]
-        im_wd = graph_list[0].y.shape[2]
+        im_ht = graph_list[0].y.shape[1] // 8
+        im_wd = graph_list[0].y.shape[2] // 8
         cinp = graph_list[1].clone()
 
         # run the feature network
         with autocast(enabled=self.args.mixed_precision):
-            fembedding_list = self.fnet(graph_list[0:2])
+            fembedding_list = self.fnet(graph_list[0:4])
         
         # print(fembedding_list)
         corr_fn = CorrGraph( [im_ht,im_wd], fembedding_list, radius=self.args.corr_radius)

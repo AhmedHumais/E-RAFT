@@ -34,9 +34,33 @@ class MaxPooling(torch.nn.Module):
                 ) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.LongTensor, torch.Tensor, torch.Tensor], Data]:
         assert edge_index is not None, "edge_index must not be None"
 
-        cluster = voxel_grid(pos[:, :2], batch=batch, size=self.voxel_size)
+        cluster = voxel_grid(pos[:, 1:3], batch=batch, size=self.voxel_size)  # cluster on spatial dimension
         data = Data(x=x, pos=pos, edge_index=edge_index, batch=batch)
         data = max_pool(cluster, data=data, transform=self.transform)  # transform for new edge attributes
+        if return_data_obj:
+            return data
+        else:
+            return data.x, data.pos, getattr(data, "batch"), data.edge_index, data.edge_attr
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(voxel_size={self.voxel_size})"
+    
+    
+class MaxPooling2(torch.nn.Module):
+
+    def __init__(self, stride: int, transform: Callable[[Data, ], Data] = None):
+        super(MaxPooling2, self).__init__()
+        self.voxel_size = [stride+1, stride+1]
+        self.scale = stride
+        self.transform = transform
+
+    def forward(self, data: Data, return_data_obj: bool = False
+                ) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.LongTensor, torch.Tensor, torch.Tensor], Data]:
+
+        cluster = voxel_grid(data.pos[:, 1:3], batch=data.batch, size=self.voxel_size)  # cluster on spatial dimension
+        # data = Data(x=x, pos=pos, edge_index=edge_index, batch=batch)
+        data = max_pool(cluster, data=data, transform=self.transform)  # transform for new edge attributes
+        data.pos[:,1:3] = data.pos[:,1:3] // self.scale
         if return_data_obj:
             return data
         else:
