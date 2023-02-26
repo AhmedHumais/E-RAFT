@@ -67,7 +67,7 @@ class GraphEncoder(nn.Module):
                 data.x = nn.functional.elu(self.conv6(data.x, data.edge_index, data.edge_attr))
                 data.x = self.norm6(data.x)
                 out.append(data)
-                print('run')
+                # print('run')
         else:
             data = in_data
             data.x = nn.functional.elu(self.conv1(data.x, data.edge_index, data.edge_attr))

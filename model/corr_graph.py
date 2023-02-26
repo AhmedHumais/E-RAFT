@@ -24,6 +24,9 @@ class CorrGraph:
             fmap2 = CorrGraph.graph2fmap(imsz, graphs_list[j+1])
                        
             corr = CorrGraph.corr(fmap1, fmap2)
+            for k in range(self.num_corr_volumes-j-1):
+                fmap = CorrGraph.graph2fmap(imsz, graphs_list[j+k+2])
+                corr = corr + CorrGraph.corr(fmap1, fmap)
             
             batch, h1, w1, dim, h2, w2 = corr.shape
             corr = corr.reshape(batch*h1*w1, dim, h2, w2)
@@ -73,13 +76,13 @@ class CorrGraph:
             else:
                 fmap[0,:,int(graph_batch.pos[i,2]), int(graph_batch.pos[i,1])] = graph_batch.x[i,:]
 
-        return torch.Tensor(fmap)          
+        return fmap       
 
     @staticmethod
     def corr(fmap1, fmap2):
         
-        print(fmap1.shape)
-        print(fmap2.shape)
+        # print(fmap1.shape)
+        # print(fmap2.shape)
         
         batch, dim, ht, wd = fmap1.shape
         fmap1 = fmap1.view(batch, dim, ht*wd)

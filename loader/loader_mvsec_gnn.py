@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 
-from pathlib import Path
 import os
 import h5py
 
@@ -9,11 +8,9 @@ from torch_geometric.data import Data, Dataset, Batch
 from torch_geometric.nn.pool import radius_graph, knn_graph
 from torch_geometric.transforms import Cartesian
 from tqdm.auto import tqdm
-from model import eraftv2
-import matplotlib.pyplot as plt
 
-from utils.visualization import visualize_optical_flow
 
+"""@TODO: gt should be only in first graph to save GPU memeory space"""
 def make_graph(ev_arr, gt, beta=0.5e4):
     ts_sample = ev_arr[:, 3] - ev_arr[0, 3]
     ts_sample = torch.tensor(ts_sample*beta).float().reshape(-1, 1)
@@ -33,12 +30,9 @@ def make_graph(ev_arr, gt, beta=0.5e4):
     return graph
 
 class MVSECDataset:
-
-    def __init__(
-            self,
-            graphs_per_pred = 5
-            ):
-        self.root = Path('/media/ahmed/drive1/flow-data/mvsec20/MVSECGraphDatset/')
+    def __init__(self, path, graphs_per_pred = 5):
+        self.root = path        
+        # self.root = Path('/media/ahmed/drive1/flow-data/mvsec20/MVSECGraphDatset/')
         self.graphs_per_pred = graphs_per_pred
 
         if len(os.listdir(self.root / 'raw')) > len(os.listdir(self.root / 'processed')):
@@ -59,7 +53,7 @@ class MVSECDataset:
             knot_idx = np.searchsorted(events[:, 2], knots)
             for idx, i in enumerate(range(self.graphs_per_pred)):
                 outdir = self.root / 'processed' / (h5_file[:-3] + f'_{idx+1}.pt')
-                torch.save(make_graph(events[knot_idx[i]:knot_idx[i+1]], gt=torch.stack([flow, flow_valid], dim=0)), outdir)
+                torch.save(make_graph(events[knot_idx[i]:knot_idx[i+1]], gt=np.stack([flow, np.stack([flow_valid]*2, axis=0)], axis=0)), outdir)
 
     def __getitem__(self, idx):
         out_graphs = []
@@ -70,36 +64,12 @@ class MVSECDataset:
     def __len__(self):
         return len(os.listdir(self.root / 'raw'))
     
-def collate_fn(list_of_list_of_graphs):
-    batch_size = len(list_of_list_of_graphs)
-    graphs_per_pred = len(list_of_list_of_graphs[0])
-    make_batch = lambda list_of_graphs: Batch.from_data_list(list_of_graphs)
-    return [
-        make_batch([list_of_list_of_graphs[i][j] for i in range(batch_size)]) 
-        for j in range(graphs_per_pred)
-        ]
+    def collate_fn(self, list_of_list_of_graphs):
+        batch_size = len(list_of_list_of_graphs)
+        graphs_per_pred = len(list_of_list_of_graphs[0])
+        make_batch = lambda list_of_graphs: Batch.from_data_list(list_of_graphs)
+        return [
+            make_batch([list_of_list_of_graphs[i][j] for i in range(batch_size)]) 
+            for j in range(graphs_per_pred)
+            ]
 
-dset = MVSECDataset()
-loader = torch.utils.data.DataLoader(dset, batch_size=1, collate_fn=collate_fn)
-# print(next(iter(loader)))
-
-
-data = next(iter(loader))
-gpu = torch.device('cuda:' + str(0))
-model = eraftv2.ERAFT(4)
-model = model.to(gpu)
-
-for it in data:
-    it = it.cuda()
-    
-flow, flow_list = model(data)
-
-flow_res = flow_list[-1].squeeze(dim=0).cpu().detach().numpy() 
-
-img, _ = visualize_optical_flow(flow_res)
-# print(flow.shape)
-# print(flow_list)
-
-# plt.imshow(img)
-# plt.show()
-# print(flow.shape)
