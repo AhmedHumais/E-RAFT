@@ -29,7 +29,7 @@ def make_graph(ev_arr, gt, beta=0.5e4):
 
     return graph
 
-class MVSECDataset:
+class MVSEC20hz_outdoor_day1:
     def __init__(self, path, graphs_per_pred = 5):
         self.root = path        
         # self.root = Path('/media/ahmed/drive1/flow-data/mvsec20/MVSECGraphDatset/')

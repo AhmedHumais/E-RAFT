@@ -8,11 +8,11 @@ import utils.transformers as transformers
 import utils.filename_templates as TEMPLATES
 import utils.helper_functions as helper
 from matplotlib.lines import Line2D
-from skimage.transform import rotate, warp
-from skimage import io
+# from skimage.transform import rotate, warp
+# from skimage import io
 import cv2
 import imageio
-from torchvision.transforms import CenterCrop
+# from torchvision.transforms import CenterCrop
 
 class BaseVisualizer(object):
     def __init__(self, dataloader, save_path, additional_args=None):

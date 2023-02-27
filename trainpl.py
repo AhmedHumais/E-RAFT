@@ -16,7 +16,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 
 from torch.utils.data import DataLoader
-from loader.loader_mvsec_gnn import MVSECDataset
+from loader.loader_mvsec_gnn import MVSEC20hz_outdoor_day1
 from model.eraftv2 import ERAFT
 import pytorch_lightning as pl
 
@@ -143,8 +143,17 @@ if __name__ == '__main__':
     if not os.path.isdir('checkpoints'):
         os.mkdir('checkpoints')
 
-    mvsec_dataset=MVSECDataset(Path('/media/kucarst3-dlws/HDD3/humais/MVSECGraphDatset'))
+    mvsec_dataset=MVSEC20hz_outdoor_day1(Path('/media/kucarst3-dlws/HDD3/humais/MVSECGraphDatset'))
     train_loader = DataLoader(mvsec_dataset, batch_size=1, collate_fn=mvsec_dataset.collate_fn)
 
-    trainer = pl.Trainer(accelerator="gpu", max_epochs=args.num_steps, devices=2, strategy="ddp", limit_train_batches=512, default_root_dir="checkpoints", logger=pl.loggers.CSVLogger('checkpoints'))
+    trainer = pl.Trainer(
+        accelerator="gpu", 
+        max_epochs=1, 
+        devices=2, 
+        strategy="ddp", 
+        limit_train_batches=512, 
+        default_root_dir="checkpoints", 
+        logger=pl.loggers.CSVLogger('checkpoints'), 
+        profiler="advanced"
+        )
     trainer.fit(EraftTrainer(args), train_loader) 
