@@ -2,11 +2,11 @@ import torch
 import torch.nn.functional as F
 from model.utils import bilinear_sampler, coords_grid
 import numpy as np
-try:
-    import alt_cuda_corr
-except:
-    # alt_cuda_corr is not compiled
-    pass
+# try:
+#     import alt_cuda_corr
+# except:
+#     # alt_cuda_corr is not compiled
+#     pass
 
 # TODO: find a better way to deal with batch stuff in graph2fmap
 

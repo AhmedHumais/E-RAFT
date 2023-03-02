@@ -3,31 +3,9 @@ import numpy as np
 
 import os
 import h5py
-
-from torch_geometric.data import Data, Dataset, Batch
-from torch_geometric.nn.pool import radius_graph, knn_graph
-from torch_geometric.transforms import Cartesian
 from tqdm.auto import tqdm
+from .utils import make_graph
 
-
-"""@TODO: gt should be only in first graph to save GPU memeory space"""
-def make_graph(ev_arr, gt, beta=0.5e4):
-    ts_sample = ev_arr[:, 3] - ev_arr[0, 3]
-    ts_sample = torch.tensor(ts_sample*beta).float().reshape(-1, 1)
-
-    coords = torch.tensor(ev_arr[:, :2]).float()
-    pos = torch.hstack((ts_sample, coords))
-
-    edge_index = knn_graph(pos, k=32)
-
-    pol = torch.tensor(ev_arr[:, 2]).float().reshape(-1, 1)
-    #feature = pol
-    feature = torch.hstack((pos, pol))
-
-    graph = Data(x=feature, edge_index=edge_index, pos=pos, y = torch.tensor(gt))
-    graph = Cartesian()(graph)
-
-    return graph
 
 class MVSEC20hz_outdoor_day1:
     def __init__(self, path, graphs_per_pred = 5):
@@ -63,13 +41,3 @@ class MVSEC20hz_outdoor_day1:
     
     def __len__(self):
         return len(os.listdir(self.root / 'raw'))
-    
-    def collate_fn(self, list_of_list_of_graphs):
-        batch_size = len(list_of_list_of_graphs)
-        graphs_per_pred = len(list_of_list_of_graphs[0])
-        make_batch = lambda list_of_graphs: Batch.from_data_list(list_of_graphs)
-        return [
-            make_batch([list_of_list_of_graphs[i][j] for i in range(batch_size)]) 
-            for j in range(graphs_per_pred)
-            ]
-

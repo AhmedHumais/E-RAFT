@@ -48,7 +48,7 @@ class ERAFT(nn.Module):
         self.context_dim = cdim = 128
         args.corr_levels = 4
         args.corr_radius = 4
-        args.corr_volumes = 4
+        args.corr_volumes = 1
 
         # feature network, context network, and update block
         self.fnet = GraphEncoder(output_dim= 256, n_feature= n_first_channels)        
@@ -64,13 +64,13 @@ class ERAFT(nn.Module):
             if isinstance(m, nn.BatchNorm2d):
                 m.eval()
 
-    def initialize_flow(self, gph):
+    def initialize_flow(self, img):
         """ Flow is represented as difference between two coordinate grids flow = coords1 - coords0"""
-        N = gph.num_graphs
-        H = gph.y.shape[-2]
-        W = gph.y.shape[-1]
-        coords0 = coords_grid(N, H//8, W//8).to(gph.x.device)
-        coords1 = coords_grid(N, H//8, W//8).to(gph.x.device)
+        N = img.shape[0]
+        H = img.shape[-2]
+        W = img.shape[-1]
+        coords0 = coords_grid(N, H//8, W//8).to(img.device)
+        coords1 = coords_grid(N, H//8, W//8).to(img.device)
 
         # optical flow computed as difference: flow = coords1 - coords0
         return coords0, coords1
@@ -89,7 +89,7 @@ class ERAFT(nn.Module):
         return up_flow.reshape(N, 2, 8*H, 8*W)
 
 
-    def forward(self, graph_list, iters=12, flow_init=None, upsample=True):
+    def forward(self, graph_list, img, iters=12, flow_init=None, upsample=True):
         """ Estimate optical flow between pair of frames """
         # Pad Image (for flawless up&downsampling)
         
@@ -99,8 +99,8 @@ class ERAFT(nn.Module):
 
         hdim = self.hidden_dim
         cdim = self.context_dim
-        im_ht = graph_list[0].y.shape[-2] // 8
-        im_wd = graph_list[0].y.shape[-1] // 8
+        im_ht = img.shape[-2] // 8
+        im_wd = img.shape[-1] // 8
         cinp = graph_list[0].clone()
 
         # run the feature network
@@ -119,7 +119,7 @@ class ERAFT(nn.Module):
             inp = torch.relu(inp)
 
         # Initialize Grids. First channel: x, 2nd channel: y. Image is just used to get the shape
-        coords0, coords1 = self.initialize_flow(graph_list[0])
+        coords0, coords1 = self.initialize_flow(img)
 
         if flow_init is not None:
             coords1 = coords1 + flow_init

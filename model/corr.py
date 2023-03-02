@@ -2,11 +2,11 @@ import torch
 import torch.nn.functional as F
 from model.utils import bilinear_sampler, coords_grid
 
-try:
-    import alt_cuda_corr
-except:
-    # alt_cuda_corr is not compiled
-    pass
+# try:
+#     import alt_cuda_corr
+# except:
+#     # alt_cuda_corr is not compiled
+#     pass
 
 
 class CorrBlock:

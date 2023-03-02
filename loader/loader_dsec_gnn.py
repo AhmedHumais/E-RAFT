@@ -14,9 +14,9 @@ from matplotlib import pyplot as plt
 from utils import transformers
 import os
 import imageio
-
+from .utils import make_graph
 import hdf5plugin
-
+from typing import List
 from utils.dsec_utils import RepresentationType, VoxelGrid, flow_16bit_to_float
 
 VISU_INDEX = 1
@@ -175,9 +175,8 @@ class EventSlicer:
 
 
 class Sequence(Dataset):
-    def __init__(self, seq_path: Path, event_path: Path, mode: str='train', delta_t_ms: int=100, transforms=None):
+    def __init__(self, flow_paths: List[Path], event_paths: List[Path], mode: str='train', delta_t_ms: int=100, transforms=None):
         assert delta_t_ms == 100
-        assert seq_path.is_dir()
         assert mode in {'train', 'test'}
         '''
         Directory Structure:
@@ -203,23 +202,43 @@ class Sequence(Dataset):
         self.delta_t_us = delta_t_ms * 1000
 
         #Load and compute timestamps and indices
-        self.timestamps_flow = np.loadtxt(seq_path / 'flow' / 'forward_timestamps.txt', dtype='int64', delimiter=',')
-        self.flow_indices = np.arange(len(self.timestamps_flow))
-        self.flow_file_names = sorted(os.listdir(seq_path / 'flow' / 'forward'))
-        self.flow_dir = seq_path / 'flow' / 'forward'
+        assert flow_paths
+        assert len(flow_paths) == len(event_paths)
+        self.folders =[]
+        self.finalizers = []
+        self.h5fs = []
+        lengths = []
+        for idx, flow_path in enumerate(flow_paths):
 
-        # Left events only
-        ev_dir_location = event_path / 'events' / 'left'
-        ev_data_file = ev_dir_location / 'events.h5'
-        ev_rect_file = ev_dir_location / 'rectify_map.h5'
+            timestamps_flow = np.loadtxt(flow_path / 'flow' / 'forward_timestamps.txt', dtype='int64', delimiter=',')
+            flow_indices = np.arange(len(timestamps_flow))
+            file_names = sorted(os.listdir(flow_path / 'flow' / 'forward'))
+            flow_dir = flow_path / 'flow' / 'forward'
+            flow_file_paths = [flow_dir / file_name for file_name in file_names]
+            lengths.append(len(timestamps_flow))
 
-        h5f_location = h5py.File(str(ev_data_file), 'r')
-        self.h5f = h5f_location
-        self.event_slicer = EventSlicer(h5f_location)
-        with h5py.File(str(ev_rect_file), 'r') as h5_rect:
-            self.rectify_ev_map = h5_rect['rectify_map'][()]
+            # Left events only
+            ev_dir_location = event_paths[idx] / 'events' / 'left'
+            ev_data_file = ev_dir_location / 'events.h5'
+            ev_rect_file = ev_dir_location / 'rectify_map.h5'
 
-        self._finalizer = weakref.finalize(self, self.close_callback, self.h5f)
+            h5f_location = h5py.File(str(ev_data_file), 'r')
+            self.h5fs.append(h5f_location)
+            event_slicer = EventSlicer(h5f_location)
+            with h5py.File(str(ev_rect_file), 'r') as h5_rect:
+                rectify_ev_map = h5_rect['rectify_map'][()]
+
+            seq_data = {
+                'timestamps_flow' : timestamps_flow,
+                'flow_indices' : flow_indices,
+                'flow_files' : flow_file_paths,
+                'event_slicer' : event_slicer,
+                'rectify_ev_map' : rectify_ev_map
+            }
+            self.folders.append(seq_data)
+
+            self.finalizers.append(weakref.finalize(self, self.close_callback, self.h5fs[idx]))
+        self.seq_lengths = np.array(lengths)
 
     def getHeightAndWidth(self):
         return self.height, self.width
@@ -246,72 +265,83 @@ class Sequence(Dataset):
         return self.height, self.width
 
     def __len__(self):
-        return len(self.timestamps_flow)
+        return np.sum(self.seq_lengths)
 
-    def rectify_events(self, x: np.ndarray, y: np.ndarray):
+    def rectify_events(self, x: np.ndarray, y: np.ndarray, rectify_map):
         # assert location in self.locations
         # From distorted to undistorted
-        rectify_map = self.rectify_ev_map
+        # rectify_map = self.rectify_ev_map
         assert rectify_map.shape == (self.height, self.width, 2), rectify_map.shape
         assert x.max() < self.width
         assert y.max() < self.height
         return rectify_map[y, x]
 
+    def down_sample_events(self, event_mat: np.ndarray, factor: int):
+        vol = np.zeros((4, self.height//factor, self.width//factor))
+        for i in range(len(event_mat)):
+            vol[:,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = event_mat[i]
+            if event_mat[i,1] ==0:
+                vol[1,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = -1
+        idxs = np.argwhere(vol[1,:,:]!=0)
+        x_pos = idxs[:,0]
+        y_pos = idxs[:,1]
+        sampled_events = vol[:,x_pos,y_pos]
+
+        return sampled_events
+    
+    def rectify(self, sampled_events, rectify_map):
+        xy_rect = self.rectify_events(sampled_events[2,:].astype('int'), sampled_events[3,:].astype('int'), rectify_map)
+        rectified_events = np.stack((sampled_events[0,:], sampled_events[1,:], xy_rect[:,0], xy_rect[:,1]))
+        return rectified_events
+
     def get_event_frames(self, index, crop_window=None, flip=None):
         # should output a dict of event frames, valid_mask and gt
+        # folder_idx = np.argwhere(self.seq_lengths>=index)[0][0]
+        
+        # if index > self.seq_lengths[0]:
+        #     index = index-self.seq_lengths[folder_idx-1]
 
-        t_i = self.timestamps_flow[index,0]
-        t_f = self.timestamps_flow[index,1]
+        for idx, folder_len in enumerate(self.seq_lengths):
+            if index >= folder_len:
+                index = index - folder_len
+            else:
+                folder_idx =idx
+                break
+        
+        t_i = (self.folders[folder_idx]['timestamps_flow'])[index,0]
+        t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
         t_mid = (t_f+t_i)//2
 
-        flow, valid_mask = self.load_flow(self.flow_dir / self.flow_file_names[index])
+        flow, valid_mask = self.load_flow(self.folders[folder_idx]['flow_files'][index])
         flow = np.array(flow)
         valid_mask = np.array(valid_mask)
         output={
             'gt_flow': flow,
             'valid':  valid_mask
         }
-        ev_dat_r = self.event_slicer.get_events(t_i, t_mid)
-        ev_dat_t = self.event_slicer.get_events(t_mid, t_f)
+        ev_dat_r = (self.folders[folder_idx]['event_slicer']).get_events(t_i, t_mid)
+        ev_dat_t = (self.folders[folder_idx]['event_slicer']).get_events(t_mid, t_f)
+        assert ev_dat_r is not None
+        assert ev_dat_t is not None
         ref =[]
         tgt =[]
-        if ev_dat_r is not None:
-            # xy_rect = self.rectify_events(ev_dat_r['x'], ev_dat_r['y'])    # should rectify later 
-            ref = np.stack((ev_dat_r['t'], ev_dat_r['p'], ev_dat_r['x'], ev_dat_r['y']))
-            ref = np.transpose(ref)
-            ref = np.array(sorted(ref, key=lambda x:x[0], reverse=True))
+        ref = np.stack((ev_dat_r['t'], ev_dat_r['p'], ev_dat_r['x'], ev_dat_r['y']))
+        ref = np.transpose(ref)
+        ref = np.array(sorted(ref, key=lambda x:x[0], reverse=True))
         
-        if ev_dat_t is not None:
-            # xy_rect = self.rectify_events(ev_dat_t['x'], ev_dat_t['y'])   # should rectify later 
-            tgt = np.stack((ev_dat_t['t'], ev_dat_t['p'], ev_dat_t['x'], ev_dat_t['y']))
-            tgt = np.transpose(tgt)
-            tgt = np.array(sorted(tgt, key=lambda x:x[0]))
+        tgt = np.stack((ev_dat_t['t'], ev_dat_t['p'], ev_dat_t['x'], ev_dat_t['y']))
+        tgt = np.transpose(tgt)
+        tgt = np.array(sorted(tgt, key=lambda x:x[0]))
 
-        h_map = np.zeros((self.height, self.width))
-        h_map[ref[:,-1], ref[:,-2]] = 1
-        vol_r = np.zeros((2, self.height, self.width))
-        for i in range(len(ref)):
-            vol_r[:,ref[i,-1], ref[i,-2]] = ref[i, 0:2]
-            if ref[i,1] ==0:
-                vol_r[1,ref[i,-1], ref[i,-2]] = -1
-        idxs = np.argwhere(vol_r[1,:,:]!=0)
-        x_pos = idxs[:,1]
-        y_pos = idxs[:,0]
-        r_events = vol_r[:,y_pos,x_pos]
-        xy_rect = self.rectify_events(x_pos, y_pos)
-        r_events = np.stack((r_events[0,:], r_events[1,:], xy_rect[:,0], xy_rect[:,1]))
+        #normlize the time
+        t_0 = ref[-1,0]
+        ref[:,0] = ref[:,0] - t_0
+        tgt[:,0] = tgt[:,0] - t_0
 
-        vol_t = np.zeros((2, self.height, self.width))
-        for i in range(len(tgt)):
-            vol_t[:,tgt[i,-1], tgt[i,-2]] = tgt[i, 0:2]
-            if tgt[i,1] ==0:
-                vol_t[1,tgt[i,-1], tgt[i,-2]] = -1
-        idxs = np.argwhere(vol_t[1,:,:]!=0)
-        x_pos = idxs[:,1]
-        y_pos = idxs[:,0]
-        t_events = vol_t[:,y_pos,x_pos]
-        xy_rect = self.rectify_events(x_pos, y_pos)
-        t_events = np.stack((t_events[0,:], t_events[1,:], xy_rect[:,0], xy_rect[:,1]))
+        r_events = self.down_sample_events(ref, 4)
+        r_events = self.rectify(r_events, self.folders[folder_idx]['rectify_ev_map'])
+        t_events = self.down_sample_events(tgt, 4)
+        t_events = self.rectify(t_events, self.folders[folder_idx]['rectify_ev_map'])
 
         output['ref_events'] = r_events.T
         output['tgt_events'] = t_events.T
@@ -320,8 +350,16 @@ class Sequence(Dataset):
 
     def __getitem__(self, idx):
         sample =  self.get_event_frames(idx)
+        ref_graph = make_graph(
+                sample['ref_events'][np.argsort(sample['ref_events'][:, 0])][:, [2, 3, 1, 0]]
+            )
+        trgt_graph = make_graph(
+                sample['tgt_events'][np.argsort(sample['tgt_events'][:, 0])][:, [2, 3, 1, 0]]
+            )
         
-        return sample
+        gt=np.stack([sample['gt_flow'], np.stack([sample['valid']]*2, axis=-1)], axis=0)
+        gt = gt.transpose(0,3,1,2)
+        return [ref_graph, trgt_graph], torch.tensor(gt)
 
 
 class SequenceRecurrent(Sequence):

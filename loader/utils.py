@@ -8,6 +8,36 @@ from itertools import chain
 import h5py
 import json
 
+from torch_geometric.data import Data, Dataset, Batch
+from torch_geometric.nn.pool import radius_graph, knn_graph
+from torch_geometric.transforms import Cartesian
+
+
+"""@TODO: gt should be only in first graph to save GPU memeory space"""
+def make_graph(ev_arr, gt=None, beta=0.5e4):
+    """
+    ev_arr should be an n_events x 4 size array such that
+    ev_arr[:, 0] is x
+    ev_arr[:, 1] is y
+    ev_arr[:, 2] is p
+    ev_arr[:, 3] is t
+    """
+    ts_sample = ev_arr[:, 3] - ev_arr[0, 3]
+    ts_sample = torch.tensor(ts_sample*beta).float().reshape(-1, 1)
+
+    coords = torch.tensor(ev_arr[:, :2]).float()
+    pos = torch.hstack((ts_sample, coords))
+
+    edge_index = knn_graph(pos, k=32)
+
+    pol = torch.tensor(ev_arr[:, 2]).float().reshape(-1, 1)
+    #feature = pol
+    feature = torch.hstack((pos, pol))
+    y = torch.tensor(gt)[None, :] if not gt is None else gt
+    graph = Data(x=feature, edge_index=edge_index, pos=pos, y = y)
+    graph = Cartesian()(graph)
+
+    return graph
 
 class EventSequence(object):
     def __init__(self, dataframe, params, features=None, timestamp_multiplier=None, convert_to_relative=False):
@@ -185,3 +215,30 @@ def load_config(path, datasets):
                       ". Please check if the file 'config.json' is existing in the dataset-scene directory")
                 raise
     return config
+
+
+def mvsec_collate_fn(list_of_list_of_graphs):
+    batch_size = len(list_of_list_of_graphs)
+    graphs_per_pred = len(list_of_list_of_graphs[0])
+    make_batch = lambda list_of_graphs: Batch.from_data_list(list_of_graphs)
+    return [
+        make_batch([list_of_list_of_graphs[i][j] for i in range(batch_size)]) 
+        for j in range(graphs_per_pred)
+        ]
+
+def dsec_collate_fn(ref_tgt_valid_list):
+    ref_tgt_list = []
+    valid = []
+
+    for rt, v in ref_tgt_valid_list:
+        ref_tgt_list.append(rt)
+        valid.append(v)
+
+    batch_size = len(ref_tgt_valid_list)
+    make_batch = lambda list_of_graphs: Batch.from_data_list(list_of_graphs)
+    graph_batch = [
+        make_batch([ref_tgt_list[i][j] for i in range(batch_size)]) 
+        for j in range(2)
+        ]
+    valid_batch = torch.stack(valid)
+    return graph_batch, valid_batch

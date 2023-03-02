@@ -15,12 +15,14 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from torch.utils.data import DataLoader
+from torch.utils.data.dataloader import DataLoader
 from loader.loader_mvsec_gnn import MVSEC20hz_outdoor_day1
 from model.eraftv2 import ERAFT
 import pytorch_lightning as pl
 
-from loader.utils import mvsec_collate_fn
+from loader.utils import dsec_collate_fn
+from loader.loader_dsec_gnn import Sequence
+
 # from torch.utils.tensorboard import SummaryWriter
 
 # exclude extremly large displacements
@@ -33,50 +35,54 @@ class EraftTrainer(pl.LightningModule):
         super().__init__()
         self.model = ERAFT(args.n_graph_feat)
         self.args = args
-        self.automatic_optimization = False
+        # self.automatic_optimization = False
 
     def training_step(self, batch, batch_idx):
-        optimizer = self.optimizers()
-        # scheduler = self.lr_schedulers()
-        optimizer.zero_grad()
+        # optimizer = self.optimizers()
+        # # scheduler = self.lr_schedulers()
+        # optimizer.zero_grad()
+        # self.model.train()
 
-        for i in range(len(batch)-1):    # to save space
-            batch[i+1].y = None
+        graph_data, gt = batch
 
-        graph_data = [x.cuda() for x in batch]
-
-        flow = graph_data[0].y[0]
-        valid = graph_data[0].y[1]
+        flow = gt[:,0]
+        valid = gt[:,1]
         
-        flow = torch.unsqueeze(flow, dim=0)      # for batch stuff    
-        valid = torch.unsqueeze(valid, dim=0)    # for batch stuff
-        
-        # image1, image2, flow, valid = [x.cuda() for x in data_blob]
-
-        # if args.add_noise:
-        #     stdv = np.random.uniform(0.0, 5.0)
-        #     image1 = (image1 + stdv * torch.randn(*image1.shape).cuda()).clamp(0.0, 255.0)
-        #     image2 = (image2 + stdv * torch.randn(*image2.shape).cuda()).clamp(0.0, 255.0)
-
-        _, flow_predictions = self.model(graph_data, iters=self.args.iters)            
+        # flow = torch.unsqueeze(flow, dim=0)      # for batch stuff    
+        # valid = torch.unsqueeze(valid, dim=0)    # for batch stuff
+        _, flow_predictions = self.model(graph_data, flow, iters=self.args.iters)            
 
         loss, metrics = self.sequence_loss(flow_predictions, flow, valid, self.args.gamma)
-        self.manual_backward(loss)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip)
+        # self.manual_backward(loss)
+        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip)
         
-        optimizer.step()
+        # optimizer.step()
         # scheduler.step()
         metrics = {f'{key}_train': value for key, value in metrics.items()}
         self.log_dict(metrics, prog_bar=True)
+
         return loss
 
+    def validation_step(self, batch, batch_idx):
+
+        # self.model.eval()
+        graph_data, gt = batch
+
+        flow = gt[:,0]
+        valid = gt[:,1]
+
+        # with torch.no_grad():
+        _, flow_predictions = self.model(graph_data, flow, iters=self.args.iters)            
+
+        loss, metrics = self.sequence_loss(flow_predictions, flow, valid, self.args.gamma)
+        metrics = {f'{key}_val': value for key, value in metrics.items()}
+        self.log_dict(metrics, prog_bar=True)
+        
+        return loss
+   
     def configure_optimizers(self):
         optimizer = optim.AdamW(self.model.parameters(), lr=self.args.lr, weight_decay=self.args.wdecay, eps=self.args.epsilon)
 
-        # scheduler = optim.lr_scheduler.OneCycleLR(optimizer, self.args.lr, self.args.num_steps+100,
-        #     pct_start=0.05, cycle_momentum=False, anneal_strategy='linear')
-
-        # return [optimizer], [scheduler]
         return optimizer
    
     def sequence_loss(self, flow_preds, flow_gt, valid, gamma=0.8, max_flow=MAX_FLOW):
@@ -85,8 +91,9 @@ class EraftTrainer(pl.LightningModule):
         n_predictions = len(flow_preds)    
         flow_loss = 0.0
         
-        flow_gt = flow_gt[:,:,2:258, 1:-1]       # because of padding issue of output of nn
-        valid = valid[:,1,2:258, 1:-1]           # because of padding issue of output of nn
+        # flow_gt = flow_gt[:,:,2:258, 1:-1]       # because of padding issue of output of nn
+        # valid = valid[:,1,2:258, 1:-1]           # because of padding issue of output of nn
+        valid = valid[:,1]           # because of padding issue of output of nn
 
         # exlude invalid pixels and extremely large diplacements
         mag = torch.sum(flow_gt**2, dim=1).sqrt()
@@ -143,17 +150,33 @@ if __name__ == '__main__':
     if not os.path.isdir('checkpoints'):
         os.mkdir('checkpoints')
 
-    mvsec_dataset=MVSEC20hz_outdoor_day1(Path('/media/kucarst3-dlws/HDD3/humais/data/MVSECGraphDatset'))
-    train_loader = DataLoader(mvsec_dataset, batch_size=1, collate_fn=mvsec_collate_fn)
+    data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_01_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_c'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_a')]
+    seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_01_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_c'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_05_a')]
+    
+    val_data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_a')]
+    val_seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_a')]
+                     
+    data_set = Sequence(flow_paths=seq_path, event_paths=data_path)
+    train_loader = DataLoader(data_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=16)
+    val_set = Sequence(flow_paths=val_seq_path, event_paths=val_data_path)
+    val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=8)
 
     trainer = pl.Trainer(
         accelerator="gpu", 
-        max_epochs=1, 
-        devices=2, 
+        max_epochs=args.num_steps, 
+        devices=2,
+        # gradient_clip_val=args.clip, 
         strategy="ddp", 
-        limit_train_batches=512, 
+        # limit_train_batches=512, 
         default_root_dir="checkpoints", 
         logger=pl.loggers.CSVLogger('checkpoints'), 
         profiler="advanced"
         )
-    trainer.fit(EraftTrainer(args), train_loader) 
+    
+    trainer.fit(EraftTrainer(args), train_loader, val_loader) 
