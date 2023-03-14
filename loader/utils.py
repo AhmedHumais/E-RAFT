@@ -11,10 +11,10 @@ import json
 from torch_geometric.data import Data, Dataset, Batch
 from torch_geometric.nn.pool import radius_graph, knn_graph
 from torch_geometric.transforms import Cartesian
-
+from utils.dsec_utils import VoxelGrid
 
 """@TODO: gt should be only in first graph to save GPU memeory space"""
-def make_graph(ev_arr, gt=None, beta=0.5e4):
+def make_graph(ev_arr, gt=None, beta=0.5e4, k=16):
     """
     ev_arr should be an n_events x 4 size array such that
     ev_arr[:, 0] is x
@@ -22,13 +22,14 @@ def make_graph(ev_arr, gt=None, beta=0.5e4):
     ev_arr[:, 2] is p
     ev_arr[:, 3] is t
     """
-    ts_sample = ev_arr[:, 3] - ev_arr[0, 3]
+    # ts_sample = ev_arr[:, 3] - ev_arr[0, 3]     why is it here? should be outside graph making
+    ts_sample = ev_arr[:,3]
     ts_sample = torch.tensor(ts_sample*beta).float().reshape(-1, 1)
 
     coords = torch.tensor(ev_arr[:, :2]).float()
     pos = torch.hstack((ts_sample, coords))
 
-    edge_index = knn_graph(pos, k=32)
+    edge_index = knn_graph(pos, k=k)
 
     pol = torch.tensor(ev_arr[:, 2]).float().reshape(-1, 1)
     #feature = pol
@@ -39,6 +40,25 @@ def make_graph(ev_arr, gt=None, beta=0.5e4):
 
     return graph
 
+def make_graph_from_voxel(grid: torch.Tensor, gt=None, k=8):
+    mask = torch.nonzero(grid, as_tuple=True)
+
+    if mask[0].size()[0] <= 100:
+        print('no valid events found jumping to random item')
+        return None
+
+    t = torch.tensor(mask[0].numpy()).float().reshape(-1, 1)
+    y = torch.tensor(mask[1].numpy()).float().reshape(-1, 1)
+    x = torch.tensor(mask[2].numpy()).float().reshape(-1, 1)
+    val = torch.tensor(grid[mask].numpy()).float().reshape(-1, 1)
+    feature = torch.hstack((x,y,t,val))
+    pos = torch.hstack((t,x,y))
+    edge_index = knn_graph(pos, k=k)
+    y = torch.tensor(gt)[None, :] if not gt is None else gt
+
+    graph = Data(x=feature, edge_index=edge_index, pos=pos, y=y)
+    graph = Cartesian()(graph)
+    return graph 
 class EventSequence(object):
     def __init__(self, dataframe, params, features=None, timestamp_multiplier=None, convert_to_relative=False):
         if isinstance(dataframe, pandas.DataFrame):

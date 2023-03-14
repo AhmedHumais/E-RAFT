@@ -26,7 +26,13 @@ if __name__ == '__main__':
     flow = flow_res.squeeze().numpy()
     img, _ = visualize_optical_flow(flow)
 
-    plt.imshow(img)
+    m = rt[0].x
+    # fig = plt.figure()
+    # ax = fig.add_subplot(projection='3d')
+    valid = val[0,1,1]
+    pts = np.argwhere(valid>0.5).T
+    plt.scatter(pts[:,1], pts[:,0])
+    # plt.imshow(img)
     plt.show()
 
 

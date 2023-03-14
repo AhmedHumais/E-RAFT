@@ -40,16 +40,16 @@ class VoxelGrid(EventRepresentation):
 
             for xlim in [x0,x0+1]:
                 for ylim in [y0,y0+1]:
-                    for tlim in [t0,t0+1]:
+                    # for tlim in [t0,t0+1]:
+                    tlim = t0
+                    mask = (xlim < W) & (xlim >= 0) & (ylim < H) & (ylim >= 0) & (tlim >= 0) & (tlim < self.nb_channels)
+                    interp_weights = value * (1 - (xlim-events['x']).abs()) * (1 - (ylim-events['y']).abs()) * (1 - (tlim - t_norm).abs())
 
-                        mask = (xlim < W) & (xlim >= 0) & (ylim < H) & (ylim >= 0) & (tlim >= 0) & (tlim < self.nb_channels)
-                        interp_weights = value * (1 - (xlim-events['x']).abs()) * (1 - (ylim-events['y']).abs()) * (1 - (tlim - t_norm).abs())
+                    index = H * W * tlim.long() + \
+                            W * ylim.long() + \
+                            xlim.long()
 
-                        index = H * W * tlim.long() + \
-                                W * ylim.long() + \
-                                xlim.long()
-
-                        voxel_grid.put_(index[mask], interp_weights[mask], accumulate=True)
+                    voxel_grid.put_(index[mask], interp_weights[mask], accumulate=True)
 
             if self.normalize:
                 mask = torch.nonzero(voxel_grid, as_tuple=True)
