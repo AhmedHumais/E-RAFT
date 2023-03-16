@@ -212,10 +212,12 @@ class Sequence(Dataset):
         for idx, flow_path in enumerate(flow_paths):
 
             timestamps_flow = np.loadtxt(flow_path / 'flow' / 'forward_timestamps.txt', dtype='int64', delimiter=',')
+            timestamps_flow = timestamps_flow[1:-1]
             flow_indices = np.arange(len(timestamps_flow))
             file_names = sorted(os.listdir(flow_path / 'flow' / 'forward'))
             flow_dir = flow_path / 'flow' / 'forward'
             flow_file_paths = [flow_dir / file_name for file_name in file_names]
+            flow_file_paths = flow_file_paths[1:-1]
             lengths.append(len(timestamps_flow))
 
             # Left events only
@@ -325,8 +327,8 @@ class Sequence(Dataset):
                 break
         
         t_i = (self.folders[folder_idx]['timestamps_flow'])[index,0]
-        t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
-        t_mid = (t_f+t_i)//2
+        # t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
+        # t_mid = (t_f+t_i)//2
 
         flow, valid_mask = self.load_flow(self.folders[folder_idx]['flow_files'][index])
         flow = np.array(flow)
@@ -335,22 +337,22 @@ class Sequence(Dataset):
             'gt_flow': flow,
             'valid':  valid_mask
         }
-        ev_dat_r = (self.folders[folder_idx]['event_slicer']).get_events(t_i, t_mid)
-        ev_dat_t = (self.folders[folder_idx]['event_slicer']).get_events(t_mid, t_f)
+        ev_dat_r = (self.folders[folder_idx]['event_slicer']).get_events(t_i - self.delta_t_us, t_i)
+        ev_dat_t = (self.folders[folder_idx]['event_slicer']).get_events(t_i, t_i + self.delta_t_us)
         assert ev_dat_r is not None
         assert ev_dat_t is not None
         ref =[]
         tgt =[]
         ref = np.stack((ev_dat_r['t'], ev_dat_r['p'], ev_dat_r['x'], ev_dat_r['y']))
         ref = np.transpose(ref)
-        ref = np.array(sorted(ref, key=lambda x:x[0], reverse=True))
+        ref = np.array(sorted(ref, key=lambda x:x[0]))
         
         tgt = np.stack((ev_dat_t['t'], ev_dat_t['p'], ev_dat_t['x'], ev_dat_t['y']))
         tgt = np.transpose(tgt)
         tgt = np.array(sorted(tgt, key=lambda x:x[0]))
 
         #normlize the time
-        t_0 = ref[-1,0]
+        t_0 = ref[1,0]
         ref[:,0] = (ref[:,0] - t_0)
         tgt[:,0] = (tgt[:,0] - t_0)
 

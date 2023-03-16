@@ -68,13 +68,13 @@ class CorrGraph:
     
     @staticmethod
     def graph2fmap(im_size,graph_batch):
-        fmap = np.zeros((1, graph_batch.x.shape[1], im_size[0], im_size[1]))
+        fmap = np.zeros((graph_batch.num_graphs, graph_batch.x.shape[1], im_size[0], im_size[1]))
         fmap = torch.Tensor(fmap).cuda()
         for i in range(graph_batch.x.shape[0]):
             if graph_batch.pos[i,2] >= im_size[0] or graph_batch.pos[i,1] >= im_size[1] or graph_batch.pos[i,2] < 0 or graph_batch.pos[i,1] < 0:
                 continue
             else:
-                fmap[0,:,int(graph_batch.pos[i,2]), int(graph_batch.pos[i,1])] = graph_batch.x[i,:]
+                fmap[graph_batch.batch[i],:,int(graph_batch.pos[i,2]), int(graph_batch.pos[i,1])] = graph_batch.x[i,:]
 
         return fmap       
 

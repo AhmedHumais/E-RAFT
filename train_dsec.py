@@ -59,7 +59,7 @@ class EraftTrainer(pl.LightningModule):
         # optimizer.step()
         # scheduler.step()
         metrics = {f'{key}_train': value for key, value in metrics.items()}
-        self.log_dict(metrics, prog_bar=True)
+        self.log_dict(metrics, prog_bar=True, batch_size=1)
 
         return loss
 
@@ -74,9 +74,9 @@ class EraftTrainer(pl.LightningModule):
         # with torch.no_grad():
         _, flow_predictions = self.model(graph_data, flow, iters=self.args.iters)            
 
-        loss, metrics = self.sequence_loss(flow_predictions, flow, valid, gamma=0.5)
+        loss, metrics = self.sequence_loss(flow_predictions, flow, valid, self.args.gamma)
         metrics = {f'{key}_val': value for key, value in metrics.items()}
-        self.log_dict(metrics, prog_bar=True)
+        self.log_dict(metrics, prog_bar=True, batch_size=1)
         
         return loss
    
@@ -101,7 +101,7 @@ class EraftTrainer(pl.LightningModule):
 
         for i in range(n_predictions):
             i_weight = gamma**(n_predictions - i - 1)
-            i_loss = (flow_preds[i] - flow_gt)**2
+            i_loss = (flow_preds[i] - flow_gt).abs()
             flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
         epe = torch.sum((flow_preds[-1] - flow_gt)**2, dim=1).sqrt()
@@ -182,9 +182,9 @@ if __name__ == '__main__':
                      
                      
     data_set = Sequence(flow_paths=seq_path, event_paths=data_path)
-    train_loader = DataLoader(data_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=8)
+    train_loader = DataLoader(data_set, batch_size=5, collate_fn=dsec_collate_fn, num_workers=8)
     val_set = Sequence(flow_paths=val_seq_path, event_paths=val_data_path)
-    val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=8)
+    val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=4)
 
     trainer = pl.Trainer(
         accelerator="gpu", 
