@@ -22,6 +22,8 @@ from utils.dsec_utils import RepresentationType, VoxelGrid, flow_16bit_to_float
 
 VISU_INDEX = 1
 
+"""@TODO : check line 595"""
+
 class EventSlicer:
     def __init__(self, h5f: h5py.File):
         self.h5f = h5f
@@ -390,6 +392,209 @@ class Sequence(Dataset):
         gt = gt.transpose(0,3,1,2)
         return sample['graphs'], torch.tensor(gt)
 
+
+class EraftLoader(Dataset):
+    def __init__(self, flow_paths: List[Path], event_paths: List[Path], mode: str='train', delta_t_ms: int=100, transforms=None):
+        assert delta_t_ms == 100
+        assert mode in {'train', 'test'}
+        '''
+        Directory Structure:
+
+        Dataset
+        └── test
+            ├── interlaken_00_b
+            │   ├── events_left
+            │   │   ├── events.h5
+            │   │   └── rectify_map.h5
+            │   ├── image_timestamps.txt
+            │   └── test_forward_flow_timestamps.csv
+
+        '''
+
+        self.mode = mode
+        # Save output dimensions
+        self.height = 480
+        self.width = 640
+        self.voxel_grid = VoxelGrid((64,self.height, self.width), normalize=True)
+
+        # Save delta timestamp in ms
+        self.delta_t_us = delta_t_ms * 1000
+
+        #Load and compute timestamps and indices
+        assert flow_paths
+        assert len(flow_paths) == len(event_paths)
+        self.folders =[]
+        self.finalizers = []
+        self.h5fs = []
+        lengths = []
+        for idx, flow_path in enumerate(flow_paths):
+
+            timestamps_flow = np.loadtxt(flow_path / 'flow' / 'forward_timestamps.txt', dtype='int64', delimiter=',')
+            timestamps_flow = timestamps_flow[1:-1]
+            flow_indices = np.arange(len(timestamps_flow))
+            file_names = sorted(os.listdir(flow_path / 'flow' / 'forward'))
+            flow_dir = flow_path / 'flow' / 'forward'
+            flow_file_paths = [flow_dir / file_name for file_name in file_names]
+            flow_file_paths = flow_file_paths[1:-1]
+            lengths.append(len(timestamps_flow))
+
+            # Left events only
+            ev_dir_location = event_paths[idx] / 'events' / 'left'
+            ev_data_file = ev_dir_location / 'events.h5'
+            ev_rect_file = ev_dir_location / 'rectify_map.h5'
+
+            h5f_location = h5py.File(str(ev_data_file), 'r')
+            self.h5fs.append(h5f_location)
+            event_slicer = EventSlicer(h5f_location)
+            with h5py.File(str(ev_rect_file), 'r') as h5_rect:
+                rectify_ev_map = h5_rect['rectify_map'][()]
+
+            seq_data = {
+                'timestamps_flow' : timestamps_flow,
+                'flow_indices' : flow_indices,
+                'flow_files' : flow_file_paths,
+                'event_slicer' : event_slicer,
+                'rectify_ev_map' : rectify_ev_map
+            }
+            self.folders.append(seq_data)
+
+            self.finalizers.append(weakref.finalize(self, self.close_callback, self.h5fs[idx]))
+        self.seq_lengths = np.array(lengths)
+
+    def getHeightAndWidth(self):
+        return self.height, self.width
+
+    @staticmethod
+    def get_disparity_map(filepath: Path):
+        assert filepath.is_file()
+        disp_16bit = cv2.imread(str(filepath), cv2.IMREAD_ANYDEPTH)
+        return disp_16bit.astype('float32')/256
+
+    @staticmethod
+    def load_flow(flowfile: Path):
+        assert flowfile.exists()
+        assert flowfile.suffix == '.png'
+        flow_16bit = imageio.imread(str(flowfile), format='PNG-FI')
+        flow, valid2D = flow_16bit_to_float(flow_16bit)
+        return flow, valid2D
+
+    @staticmethod
+    def close_callback(h5f):
+        h5f.close()
+
+    def get_image_width_height(self):
+        return self.height, self.width
+
+    def __len__(self):
+        return np.sum(self.seq_lengths)
+
+    def events_to_voxel_grid(self, voxel_grid: VoxelGrid, p, t, x, y, device: str='cpu'):
+        # t = (t - t[0]).astype('float32')
+        # t = (t/t[-1])
+        t= (t*0.00005).astype('float32')
+        x = x.astype('float32')
+        y = y.astype('float32')
+        pol = p.astype('float32')
+        event_data_torch = {
+            'p': torch.from_numpy(pol),
+            't': torch.from_numpy(t),
+            'x': torch.from_numpy(x),
+            'y': torch.from_numpy(y),
+        }
+        return voxel_grid.convert(event_data_torch)
+    
+    def rectify_events(self, x: np.ndarray, y: np.ndarray, rectify_map):
+        # assert location in self.locations
+        # From distorted to undistorted
+        # rectify_map = self.rectify_ev_map
+        assert rectify_map.shape == (self.height, self.width, 2), rectify_map.shape
+        assert x.max() < self.width
+        assert y.max() < self.height
+        return rectify_map[y, x]
+
+    def down_sample_events(self, event_mat: np.ndarray, factor: int):
+        vol = np.zeros((4, self.height//factor, self.width//factor))
+        for i in range(len(event_mat)):
+            vol[:,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = event_mat[i]
+            # if event_mat[i,1] ==0:
+            #     vol[1,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = -1
+        idxs = np.argwhere(vol[0,:,:]!=0)
+        x_pos = idxs[:,0]
+        y_pos = idxs[:,1]
+        sampled_events = vol[:,x_pos,y_pos]
+
+        return sampled_events
+    
+    def rectify(self, sampled_events, rectify_map):
+        xy_rect = self.rectify_events(sampled_events[2,:].astype('int'), sampled_events[3,:].astype('int'), rectify_map)
+        rectified_events = np.stack((sampled_events[0,:], sampled_events[1,:], xy_rect[:,0], xy_rect[:,1]))
+        return rectified_events
+
+    def get_event_frames(self, index, crop_window=None, flip=None):
+        # should output a dict of event frames, valid_mask and gt
+        # folder_idx = np.argwhere(self.seq_lengths>=index)[0][0]
+        
+        # if index > self.seq_lengths[0]:
+        #     index = index-self.seq_lengths[folder_idx-1]
+
+        for idx, folder_len in enumerate(self.seq_lengths):
+            if index >= folder_len:
+                index = index - folder_len
+            else:
+                folder_idx =idx
+                break
+        
+        t_i = (self.folders[folder_idx]['timestamps_flow'])[index,0]
+        # t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
+        # t_mid = (t_f+t_i)//2
+
+        flow, valid_mask = self.load_flow(self.folders[folder_idx]['flow_files'][index])
+        flow = np.array(flow)
+        valid_mask = np.array(valid_mask)
+        output={
+            'gt_flow': flow,
+            'valid':  valid_mask
+        }
+        names = ['event_volume_old', 'event_volume_new']
+        ts_start = [t_i - self.delta_t_us, t_i]
+        ts_end = [t_i, t_i + self.delta_t_us]
+
+        for i in range(len(names)):
+            event_data = self.event_slicer.get_events(ts_start[i], ts_end[i])
+
+            p = event_data['p']
+            t = event_data['t']
+            x = event_data['x']
+            y = event_data['y']
+
+            xy_rect = self.rectify_events(x, y)
+            x_rect = xy_rect[:, 0]
+            y_rect = xy_rect[:, 1]
+
+            if crop_window is not None:
+                # Cropping (+- 2 for safety reasons)
+                x_mask = (x_rect >= crop_window['start_x']-2) & (x_rect < crop_window['start_x']+crop_window['crop_width']+2)
+                y_mask = (y_rect >= crop_window['start_y']-2) & (y_rect < crop_window['start_y']+crop_window['crop_height']+2)
+                mask_combined = x_mask & y_mask
+                p = p[mask_combined]
+                t = t[mask_combined]
+                x_rect = x_rect[mask_combined]
+                y_rect = y_rect[mask_combined]
+
+            if self.voxel_grid is None:
+                raise NotImplementedError
+            else:
+                event_representation = self.events_to_voxel_grid(p, t, x_rect, y_rect)
+                output[names[i]] = event_representation
+
+        return output
+
+    def __getitem__(self, idx):
+        sample =  self.get_event_frames(idx)
+        gt=np.stack([sample['gt_flow'], np.stack([sample['valid']]*2, axis=-1)], axis=0)
+        gt = gt.transpose(0,3,1,2)
+        ev_data = torch.stack([sample['event_volume_old'], sample['event_volume_new']])
+        return ev_data, torch.tensor(gt)
 
 class SequenceRecurrent(Sequence):
     def __init__(self, seq_path: Path, representation_type: RepresentationType, mode: str='test', delta_t_ms: int=100,
