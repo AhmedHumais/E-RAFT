@@ -122,6 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('--name', default='raft', help="name your experiment")
     parser.add_argument('--stage', help="determines which dataset to use for training") 
     parser.add_argument('--restore_ckpt', help="restore checkpoint")
+    parser.add_argument('--ckpt', type=str, default=None, help="checkpoint path to resume")    
     parser.add_argument('--small', action='store_true', help='use small model')
     parser.add_argument('--validation', type=str, nargs='+')
 
@@ -151,25 +152,32 @@ if __name__ == '__main__':
         os.mkdir('checkpoints')
 
     data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_01_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_d'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_03_a'),
+                #  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_d'),
+                #  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_03_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_06_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_07_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_08_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_09_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_10_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_c')]
+                #  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_08_a'),
+                #  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_09_a'),
+                #  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_10_a'),
+                #  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_c'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_b'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_c'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_e')]
+
     seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_01_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_d'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_03_a'),
+                # Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_d'),
+                # Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_03_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_05_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_06_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_07_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_08_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_09_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_10_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_c')]
+                # Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_08_a'),
+                # Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_09_a'),
+                # Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_10_a'),
+                # Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_c'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_b'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_c'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_e')]
     
     val_data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_a'),
                      Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_b'),
@@ -182,7 +190,7 @@ if __name__ == '__main__':
                      
                      
     data_set = Sequence(flow_paths=seq_path, event_paths=data_path)
-    train_loader = DataLoader(data_set, batch_size=5, collate_fn=dsec_collate_fn, num_workers=8)
+    train_loader = DataLoader(data_set, batch_size=4, collate_fn=dsec_collate_fn, num_workers=8)
     val_set = Sequence(flow_paths=val_seq_path, event_paths=val_data_path)
     val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=4)
 
@@ -194,7 +202,8 @@ if __name__ == '__main__':
         strategy="ddp", 
         limit_train_batches=0.2,
         limit_val_batches=0.2, 
-        default_root_dir="checkpoints", 
+        default_root_dir="checkpoints",
+        resume_from_checkpoint=args.ckpt, 
         logger=pl.loggers.CSVLogger('checkpoints'), 
         profiler="advanced"
         )
