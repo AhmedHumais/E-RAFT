@@ -362,6 +362,207 @@ class Sequence(Dataset):
         return [ref_graph, trgt_graph], torch.tensor(gt)
 
 
+class EraftLoader(Dataset):
+    def __init__(self, flow_paths: List[Path], event_paths: List[Path], mode: str='train', delta_t_ms: int=100, transforms=None):
+        assert delta_t_ms == 100
+        assert mode in {'train', 'test'}
+        '''
+        Directory Structure:
+
+        Dataset
+        └── test
+            ├── interlaken_00_b
+            │   ├── events_left
+            │   │   ├── events.h5
+            │   │   └── rectify_map.h5
+            │   ├── image_timestamps.txt
+            │   └── test_forward_flow_timestamps.csv
+
+        '''
+
+        self.mode = mode
+
+        # Save output dimensions
+        self.height = 480
+        self.width = 640
+
+        # Save delta timestamp in ms
+        self.delta_t_us = delta_t_ms * 1000
+
+        #Load and compute timestamps and indices
+        assert flow_paths
+        assert len(flow_paths) == len(event_paths)
+        self.folders =[]
+        self.finalizers = []
+        self.h5fs = []
+        lengths = []
+        for idx, flow_path in enumerate(flow_paths):
+
+            timestamps_flow = np.loadtxt(flow_path / 'flow' / 'forward_timestamps.txt', dtype='int64', delimiter=',')
+            flow_indices = np.arange(len(timestamps_flow))
+            file_names = sorted(os.listdir(flow_path / 'flow' / 'forward'))
+            flow_dir = flow_path / 'flow' / 'forward'
+            flow_file_paths = [flow_dir / file_name for file_name in file_names]
+            lengths.append(len(timestamps_flow))
+
+            # Left events only
+            ev_dir_location = event_paths[idx] / 'events' / 'left'
+            ev_data_file = ev_dir_location / 'events.h5'
+            ev_rect_file = ev_dir_location / 'rectify_map.h5'
+
+            h5f_location = h5py.File(str(ev_data_file), 'r')
+            self.h5fs.append(h5f_location)
+            event_slicer = EventSlicer(h5f_location)
+            with h5py.File(str(ev_rect_file), 'r') as h5_rect:
+                rectify_ev_map = h5_rect['rectify_map'][()]
+
+            seq_data = {
+                'timestamps_flow' : timestamps_flow,
+                'flow_indices' : flow_indices,
+                'flow_files' : flow_file_paths,
+                'event_slicer' : event_slicer,
+                'rectify_ev_map' : rectify_ev_map
+            }
+            self.folders.append(seq_data)
+
+            self.finalizers.append(weakref.finalize(self, self.close_callback, self.h5fs[idx]))
+        self.seq_lengths = np.array(lengths)
+
+    def getHeightAndWidth(self):
+        return self.height, self.width
+
+    @staticmethod
+    def get_disparity_map(filepath: Path):
+        assert filepath.is_file()
+        disp_16bit = cv2.imread(str(filepath), cv2.IMREAD_ANYDEPTH)
+        return disp_16bit.astype('float32')/256
+
+    @staticmethod
+    def load_flow(flowfile: Path):
+        assert flowfile.exists()
+        assert flowfile.suffix == '.png'
+        flow_16bit = imageio.imread(str(flowfile), format='PNG-FI')
+        flow, valid2D = flow_16bit_to_float(flow_16bit)
+        return flow, valid2D
+
+    @staticmethod
+    def close_callback(h5f):
+        h5f.close()
+
+    def get_image_width_height(self):
+        return self.height, self.width
+
+    def __len__(self):
+        return np.sum(self.seq_lengths)
+
+    def rectify_events(self, x: np.ndarray, y: np.ndarray, rectify_map):
+        # assert location in self.locations
+        # From distorted to undistorted
+        # rectify_map = self.rectify_ev_map
+        assert rectify_map.shape == (self.height, self.width, 2), rectify_map.shape
+        assert x.max() < self.width
+        assert y.max() < self.height
+        return rectify_map[y, x]
+
+    def down_sample_events(self, event_mat: np.ndarray, factor: int):
+        vol = np.zeros((4, self.height//factor, self.width//factor))
+        for i in range(len(event_mat)):
+            vol[:,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = event_mat[i]
+            if event_mat[i,1] ==0:
+                vol[1,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = -1
+        idxs = np.argwhere(vol[1,:,:]!=0)
+        x_pos = idxs[:,0]
+        y_pos = idxs[:,1]
+        sampled_events = vol[:,x_pos,y_pos]
+
+        return sampled_events
+    
+    def rectify(self, sampled_events, rectify_map):
+        xy_rect = self.rectify_events(sampled_events[2,:].astype('int'), sampled_events[3,:].astype('int'), rectify_map)
+        rectified_events = np.stack((sampled_events[0,:], sampled_events[1,:], xy_rect[:,0], xy_rect[:,1]))
+        return rectified_events
+
+    def get_event_frames(self, index, crop_window=None, flip=None):
+        # should output a dict of event frames, valid_mask and gt
+        # folder_idx = np.argwhere(self.seq_lengths>=index)[0][0]
+        
+        # if index > self.seq_lengths[0]:
+        #     index = index-self.seq_lengths[folder_idx-1]
+
+        for idx, folder_len in enumerate(self.seq_lengths):
+            if index >= folder_len:
+                index = index - folder_len
+            else:
+                folder_idx =idx
+                break
+        
+        t_i = (self.folders[folder_idx]['timestamps_flow'])[index,0]
+        t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
+        t_mid = (t_f+t_i)//2
+
+        flow, valid_mask = self.load_flow(self.folders[folder_idx]['flow_files'][index])
+        flow = np.array(flow)
+        valid_mask = np.array(valid_mask)
+        output={
+            'gt_flow': flow,
+            'valid':  valid_mask
+        }
+        ev_dat_r = (self.folders[folder_idx]['event_slicer']).get_events(t_i, t_mid)
+        ev_dat_t = (self.folders[folder_idx]['event_slicer']).get_events(t_mid, t_f)
+        names = ['event_volume_old', 'event_volume_new']
+        ts_start = [self.timestamps_flow[index] - self.delta_t_us, self.timestamps_flow[index]]
+        ts_end = [self.timestamps_flow[index], self.timestamps_flow[index] + self.delta_t_us]
+
+        file_index = self.indices[index]
+
+        output = {
+            'file_index': file_index,
+            'timestamp': self.timestamps_flow[index]
+        }
+
+        for i in range(len(names)):
+            event_data = self.event_slicer.get_events(ts_start[i], ts_end[i])
+
+            p = event_data['p']
+            t = event_data['t']
+            x = event_data['x']
+            y = event_data['y']
+
+            xy_rect = self.rectify_events(x, y)
+            x_rect = xy_rect[:, 0]
+            y_rect = xy_rect[:, 1]
+
+            if crop_window is not None:
+                # Cropping (+- 2 for safety reasons)
+                x_mask = (x_rect >= crop_window['start_x']-2) & (x_rect < crop_window['start_x']+crop_window['crop_width']+2)
+                y_mask = (y_rect >= crop_window['start_y']-2) & (y_rect < crop_window['start_y']+crop_window['crop_height']+2)
+                mask_combined = x_mask & y_mask
+                p = p[mask_combined]
+                t = t[mask_combined]
+                x_rect = x_rect[mask_combined]
+                y_rect = y_rect[mask_combined]
+
+            if self.voxel_grid is None:
+                raise NotImplementedError
+            else:
+                event_representation = self.events_to_voxel_grid(p, t, x_rect, y_rect)
+                output[names[i]] = event_representation
+
+        return output
+
+    def __getitem__(self, idx):
+        sample =  self.get_event_frames(idx)
+        ref_graph = make_graph(
+                sample['ref_events'][np.argsort(sample['ref_events'][:, 0])][:, [2, 3, 1, 0]]
+            )
+        trgt_graph = make_graph(
+                sample['tgt_events'][np.argsort(sample['tgt_events'][:, 0])][:, [2, 3, 1, 0]]
+            )
+        
+        gt=np.stack([sample['gt_flow'], np.stack([sample['valid']]*2, axis=-1)], axis=0)
+        gt = gt.transpose(0,3,1,2)
+        return [ref_graph, trgt_graph], torch.tensor(gt)
+
 class SequenceRecurrent(Sequence):
     def __init__(self, seq_path: Path, representation_type: RepresentationType, mode: str='test', delta_t_ms: int=100,
                  num_bins: int=15, transforms=None, sequence_length=1, name_idx=0, visualize=False):
