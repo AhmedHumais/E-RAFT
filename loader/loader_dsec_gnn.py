@@ -1,5 +1,6 @@
 import math
 from pathlib import Path
+from random import randint
 from typing import Dict, Tuple
 import weakref
 
@@ -14,7 +15,7 @@ from matplotlib import pyplot as plt
 from utils import transformers
 import os
 import imageio
-from .utils import make_graph
+from .utils import make_graph, make_graph_from_voxel
 import hdf5plugin
 from typing import List
 from utils.dsec_utils import RepresentationType, VoxelGrid, flow_16bit_to_float
@@ -193,10 +194,10 @@ class Sequence(Dataset):
         '''
 
         self.mode = mode
-
         # Save output dimensions
         self.height = 480
         self.width = 640
+        self.voxel_grid = VoxelGrid((64,self.height, self.width), normalize=True)
 
         # Save delta timestamp in ms
         self.delta_t_us = delta_t_ms * 1000
@@ -211,10 +212,12 @@ class Sequence(Dataset):
         for idx, flow_path in enumerate(flow_paths):
 
             timestamps_flow = np.loadtxt(flow_path / 'flow' / 'forward_timestamps.txt', dtype='int64', delimiter=',')
+            timestamps_flow = timestamps_flow[1:-1]
             flow_indices = np.arange(len(timestamps_flow))
             file_names = sorted(os.listdir(flow_path / 'flow' / 'forward'))
             flow_dir = flow_path / 'flow' / 'forward'
             flow_file_paths = [flow_dir / file_name for file_name in file_names]
+            flow_file_paths = flow_file_paths[1:-1]
             lengths.append(len(timestamps_flow))
 
             # Left events only
@@ -267,6 +270,21 @@ class Sequence(Dataset):
     def __len__(self):
         return np.sum(self.seq_lengths)
 
+    def events_to_voxel_grid(self, voxel_grid: VoxelGrid, p, t, x, y, device: str='cpu'):
+        # t = (t - t[0]).astype('float32')
+        # t = (t/t[-1])
+        t= (t*0.00005).astype('float32')
+        x = x.astype('float32')
+        y = y.astype('float32')
+        pol = p.astype('float32')
+        event_data_torch = {
+            'p': torch.from_numpy(pol),
+            't': torch.from_numpy(t),
+            'x': torch.from_numpy(x),
+            'y': torch.from_numpy(y),
+        }
+        return voxel_grid.convert(event_data_torch)
+    
     def rectify_events(self, x: np.ndarray, y: np.ndarray, rectify_map):
         # assert location in self.locations
         # From distorted to undistorted
@@ -280,9 +298,9 @@ class Sequence(Dataset):
         vol = np.zeros((4, self.height//factor, self.width//factor))
         for i in range(len(event_mat)):
             vol[:,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = event_mat[i]
-            if event_mat[i,1] ==0:
-                vol[1,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = -1
-        idxs = np.argwhere(vol[1,:,:]!=0)
+            # if event_mat[i,1] ==0:
+            #     vol[1,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = -1
+        idxs = np.argwhere(vol[0,:,:]!=0)
         x_pos = idxs[:,0]
         y_pos = idxs[:,1]
         sampled_events = vol[:,x_pos,y_pos]
@@ -309,8 +327,8 @@ class Sequence(Dataset):
                 break
         
         t_i = (self.folders[folder_idx]['timestamps_flow'])[index,0]
-        t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
-        t_mid = (t_f+t_i)//2
+        # t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
+        # t_mid = (t_f+t_i)//2
 
         flow, valid_mask = self.load_flow(self.folders[folder_idx]['flow_files'][index])
         flow = np.array(flow)
@@ -319,47 +337,58 @@ class Sequence(Dataset):
             'gt_flow': flow,
             'valid':  valid_mask
         }
-        ev_dat_r = (self.folders[folder_idx]['event_slicer']).get_events(t_i, t_mid)
-        ev_dat_t = (self.folders[folder_idx]['event_slicer']).get_events(t_mid, t_f)
+        ev_dat_r = (self.folders[folder_idx]['event_slicer']).get_events(t_i - self.delta_t_us, t_i)
+        ev_dat_t = (self.folders[folder_idx]['event_slicer']).get_events(t_i, t_i + self.delta_t_us)
         assert ev_dat_r is not None
         assert ev_dat_t is not None
         ref =[]
         tgt =[]
         ref = np.stack((ev_dat_r['t'], ev_dat_r['p'], ev_dat_r['x'], ev_dat_r['y']))
         ref = np.transpose(ref)
-        ref = np.array(sorted(ref, key=lambda x:x[0], reverse=True))
+        ref = np.array(sorted(ref, key=lambda x:x[0]))
         
         tgt = np.stack((ev_dat_t['t'], ev_dat_t['p'], ev_dat_t['x'], ev_dat_t['y']))
         tgt = np.transpose(tgt)
         tgt = np.array(sorted(tgt, key=lambda x:x[0]))
 
         #normlize the time
-        t_0 = ref[-1,0]
-        ref[:,0] = ref[:,0] - t_0
-        tgt[:,0] = tgt[:,0] - t_0
+        t_0 = ref[1,0]
+        ref[:,0] = (ref[:,0] - t_0)
+        tgt[:,0] = (tgt[:,0] - t_0)
 
-        r_events = self.down_sample_events(ref, 4)
+        r_events = self.down_sample_events(ref, 2)
         r_events = self.rectify(r_events, self.folders[folder_idx]['rectify_ev_map'])
-        t_events = self.down_sample_events(tgt, 4)
+        t_events = self.down_sample_events(tgt, 2)
         t_events = self.rectify(t_events, self.folders[folder_idx]['rectify_ev_map'])
 
-        output['ref_events'] = r_events.T
-        output['tgt_events'] = t_events.T
+        grid = self.events_to_voxel_grid(self.voxel_grid, r_events[1,:], r_events[0,:], r_events[2,:], r_events[3,:])
+        r_graph = make_graph_from_voxel(grid)
+
+        grid_t = self.events_to_voxel_grid(self.voxel_grid, t_events[1,:], t_events[0,:], t_events[2,:], t_events[3,:])
+        t_graph = make_graph_from_voxel(grid_t)
+
+        if r_graph is None or t_graph is None:
+            output['graphs'] = None
+        
+        else:
+            output['graphs'] = [r_graph, t_graph]
 
         return output
 
     def __getitem__(self, idx):
         sample =  self.get_event_frames(idx)
-        ref_graph = make_graph(
-                sample['ref_events'][np.argsort(sample['ref_events'][:, 0])][:, [2, 3, 1, 0]]
-            )
-        trgt_graph = make_graph(
-                sample['tgt_events'][np.argsort(sample['tgt_events'][:, 0])][:, [2, 3, 1, 0]]
-            )
-        
+        # ref_graph = make_graph(
+        #         sample['ref_events'][np.argsort(sample['ref_events'][:, 0])][:, [2, 3, 1, 0]], beta=0.001, k=16
+        #     )
+        # trgt_graph = make_graph(
+        #         sample['tgt_events'][np.argsort(sample['tgt_events'][:, 0])][:, [2, 3, 1, 0]], beta=0.001, k=16
+        #     )
+        while sample['graphs'] is None:
+            idx_ = randint(0, self.__len__()-1)
+            sample = self.get_event_frames(idx_)
         gt=np.stack([sample['gt_flow'], np.stack([sample['valid']]*2, axis=-1)], axis=0)
         gt = gt.transpose(0,3,1,2)
-        return [ref_graph, trgt_graph], torch.tensor(gt)
+        return sample['graphs'], torch.tensor(gt)
 
 
 class EraftLoader(Dataset):

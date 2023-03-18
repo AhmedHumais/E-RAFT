@@ -22,6 +22,10 @@ import pytorch_lightning as pl
 
 from loader.utils import dsec_collate_fn
 from loader.loader_dsec_gnn import Sequence
+from model import eraftv2
+import matplotlib.pyplot as plt
+
+from utils.visualization import visualize_optical_flow
 
 # from torch.utils.tensorboard import SummaryWriter
 
@@ -36,6 +40,9 @@ class EraftTrainer(pl.LightningModule):
         self.model = ERAFT(args.n_graph_feat)
         self.args = args
         # self.automatic_optimization = False
+
+    def forward(self, data, flow):
+        return self.model(data, flow, iters=self.args.iters)
 
     def training_step(self, batch, batch_idx):
         # optimizer = self.optimizers()
@@ -59,7 +66,7 @@ class EraftTrainer(pl.LightningModule):
         # optimizer.step()
         # scheduler.step()
         metrics = {f'{key}_train': value for key, value in metrics.items()}
-        self.log_dict(metrics, prog_bar=True, batch_size=1)
+        self.log_dict(metrics, prog_bar=True)
 
         return loss
 
@@ -74,9 +81,9 @@ class EraftTrainer(pl.LightningModule):
         # with torch.no_grad():
         _, flow_predictions = self.model(graph_data, flow, iters=self.args.iters)            
 
-        loss, metrics = self.sequence_loss(flow_predictions, flow, valid, self.args.gamma)
+        loss, metrics = self.sequence_loss(flow_predictions, flow, valid, gamma=0.5)
         metrics = {f'{key}_val': value for key, value in metrics.items()}
-        self.log_dict(metrics, prog_bar=True, batch_size=1)
+        self.log_dict(metrics, prog_bar=True)
         
         return loss
    
@@ -101,7 +108,7 @@ class EraftTrainer(pl.LightningModule):
 
         for i in range(n_predictions):
             i_weight = gamma**(n_predictions - i - 1)
-            i_loss = (flow_preds[i] - flow_gt).abs()
+            i_loss = (flow_preds[i] - flow_gt)**2
             flow_loss += i_weight * (valid[:, None] * i_loss).mean()
 
         epe = torch.sum((flow_preds[-1] - flow_gt)**2, dim=1).sqrt()
@@ -137,7 +144,7 @@ if __name__ == '__main__':
     parser.add_argument('--epsilon', type=float, default=1e-8)
     parser.add_argument('--clip', type=float, default=1.0)
     parser.add_argument('--dropout', type=float, default=0.0)
-    parser.add_argument('--gamma', type=float, default=0.7, help='exponential weighting')
+    parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
 
     parser.add_argument('--n_graph_feat', type=int, default=4, help='number of input graph features')
@@ -151,7 +158,7 @@ if __name__ == '__main__':
         os.mkdir('checkpoints')
 
     data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_01_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_d'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_b'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_03_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_06_a'),
@@ -161,7 +168,7 @@ if __name__ == '__main__':
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_10_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_c')]
     seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_01_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_d'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_b'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_03_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_05_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_06_a'),
@@ -180,23 +187,31 @@ if __name__ == '__main__':
                     Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_10_b'),
                     Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_a')]
                      
-                     
     data_set = Sequence(flow_paths=seq_path, event_paths=data_path)
-    train_loader = DataLoader(data_set, batch_size=5, collate_fn=dsec_collate_fn, num_workers=8)
+    train_loader = DataLoader(data_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=4)
     val_set = Sequence(flow_paths=val_seq_path, event_paths=val_data_path)
     val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=4)
 
-    trainer = pl.Trainer(
-        accelerator="gpu", 
-        max_epochs=args.num_steps, 
-        gpus = args.gpus,
-        gradient_clip_val=args.clip, 
-        strategy="ddp", 
-        limit_train_batches=0.2,
-        limit_val_batches=0.2, 
-        default_root_dir="checkpoints", 
-        logger=pl.loggers.CSVLogger('checkpoints'), 
-        profiler="advanced"
-        )
-    
-    trainer.fit(EraftTrainer(args), train_loader, val_loader) 
+    data, gt = next(iter(val_loader))
+    gpu = torch.device('cuda:' + str(0))
+    model = EraftTrainer(args)
+    model = model.to(gpu)
+    wts = torch.load('/media/kucarst3-dlws/HDD3/humais/E-RAFT/checkpoints/lightning_logs/version_75/checkpoints/epoch=10-step=29337.ckpt')['state_dict']
+    model.load_state_dict(wts)
+    for it in data:
+        it = it.cuda()
+
+    flow_gt = gt[:,0]
+    valid = gt[:,1]
+
+    flow, flow_list = model.forward(data, flow_gt.cuda())
+
+    flow_res = flow_list[-1].squeeze(dim=0).cpu().detach().numpy() 
+
+    img, _ = visualize_optical_flow(flow_res)
+    gt_img, _ = visualize_optical_flow(flow_gt.squeeze(dim=0).cpu().detach().numpy())
+
+    plt.imshow(img)
+    plt.figure()
+    plt.imshow(gt_img)
+    plt.show()
