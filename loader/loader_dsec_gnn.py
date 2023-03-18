@@ -22,6 +22,8 @@ from utils.dsec_utils import RepresentationType, VoxelGrid, flow_16bit_to_float
 
 VISU_INDEX = 1
 
+"""@TODO : check line 595"""
+
 class EventSlicer:
     def __init__(self, h5f: h5py.File):
         self.h5f = h5f
@@ -410,10 +412,10 @@ class EraftLoader(Dataset):
         '''
 
         self.mode = mode
-
         # Save output dimensions
         self.height = 480
         self.width = 640
+        self.voxel_grid = VoxelGrid((64,self.height, self.width), normalize=True)
 
         # Save delta timestamp in ms
         self.delta_t_us = delta_t_ms * 1000
@@ -428,10 +430,12 @@ class EraftLoader(Dataset):
         for idx, flow_path in enumerate(flow_paths):
 
             timestamps_flow = np.loadtxt(flow_path / 'flow' / 'forward_timestamps.txt', dtype='int64', delimiter=',')
+            timestamps_flow = timestamps_flow[1:-1]
             flow_indices = np.arange(len(timestamps_flow))
             file_names = sorted(os.listdir(flow_path / 'flow' / 'forward'))
             flow_dir = flow_path / 'flow' / 'forward'
             flow_file_paths = [flow_dir / file_name for file_name in file_names]
+            flow_file_paths = flow_file_paths[1:-1]
             lengths.append(len(timestamps_flow))
 
             # Left events only
@@ -484,6 +488,21 @@ class EraftLoader(Dataset):
     def __len__(self):
         return np.sum(self.seq_lengths)
 
+    def events_to_voxel_grid(self, voxel_grid: VoxelGrid, p, t, x, y, device: str='cpu'):
+        # t = (t - t[0]).astype('float32')
+        # t = (t/t[-1])
+        t= (t*0.00005).astype('float32')
+        x = x.astype('float32')
+        y = y.astype('float32')
+        pol = p.astype('float32')
+        event_data_torch = {
+            'p': torch.from_numpy(pol),
+            't': torch.from_numpy(t),
+            'x': torch.from_numpy(x),
+            'y': torch.from_numpy(y),
+        }
+        return voxel_grid.convert(event_data_torch)
+    
     def rectify_events(self, x: np.ndarray, y: np.ndarray, rectify_map):
         # assert location in self.locations
         # From distorted to undistorted
@@ -497,9 +516,9 @@ class EraftLoader(Dataset):
         vol = np.zeros((4, self.height//factor, self.width//factor))
         for i in range(len(event_mat)):
             vol[:,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = event_mat[i]
-            if event_mat[i,1] ==0:
-                vol[1,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = -1
-        idxs = np.argwhere(vol[1,:,:]!=0)
+            # if event_mat[i,1] ==0:
+            #     vol[1,int(event_mat[i,-1])//factor, int(event_mat[i,-2])//factor] = -1
+        idxs = np.argwhere(vol[0,:,:]!=0)
         x_pos = idxs[:,0]
         y_pos = idxs[:,1]
         sampled_events = vol[:,x_pos,y_pos]
@@ -526,8 +545,8 @@ class EraftLoader(Dataset):
                 break
         
         t_i = (self.folders[folder_idx]['timestamps_flow'])[index,0]
-        t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
-        t_mid = (t_f+t_i)//2
+        # t_f = (self.folders[folder_idx]['timestamps_flow'])[index,1]
+        # t_mid = (t_f+t_i)//2
 
         flow, valid_mask = self.load_flow(self.folders[folder_idx]['flow_files'][index])
         flow = np.array(flow)
@@ -536,18 +555,9 @@ class EraftLoader(Dataset):
             'gt_flow': flow,
             'valid':  valid_mask
         }
-        ev_dat_r = (self.folders[folder_idx]['event_slicer']).get_events(t_i, t_mid)
-        ev_dat_t = (self.folders[folder_idx]['event_slicer']).get_events(t_mid, t_f)
         names = ['event_volume_old', 'event_volume_new']
-        ts_start = [self.timestamps_flow[index] - self.delta_t_us, self.timestamps_flow[index]]
-        ts_end = [self.timestamps_flow[index], self.timestamps_flow[index] + self.delta_t_us]
-
-        file_index = self.indices[index]
-
-        output = {
-            'file_index': file_index,
-            'timestamp': self.timestamps_flow[index]
-        }
+        ts_start = [t_i - self.delta_t_us, t_i]
+        ts_end = [t_i, t_i + self.delta_t_us]
 
         for i in range(len(names)):
             event_data = self.event_slicer.get_events(ts_start[i], ts_end[i])
@@ -581,16 +591,10 @@ class EraftLoader(Dataset):
 
     def __getitem__(self, idx):
         sample =  self.get_event_frames(idx)
-        ref_graph = make_graph(
-                sample['ref_events'][np.argsort(sample['ref_events'][:, 0])][:, [2, 3, 1, 0]]
-            )
-        trgt_graph = make_graph(
-                sample['tgt_events'][np.argsort(sample['tgt_events'][:, 0])][:, [2, 3, 1, 0]]
-            )
-        
         gt=np.stack([sample['gt_flow'], np.stack([sample['valid']]*2, axis=-1)], axis=0)
         gt = gt.transpose(0,3,1,2)
-        return [ref_graph, trgt_graph], torch.tensor(gt)
+        ev_data = torch.stack([sample['event_volume_old'], sample['event_volume_new']])
+        return ev_data, torch.tensor(gt)
 
 class SequenceRecurrent(Sequence):
     def __init__(self, seq_path: Path, representation_type: RepresentationType, mode: str='test', delta_t_ms: int=100,

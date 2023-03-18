@@ -1,29 +1,23 @@
+    
 from __future__ import print_function, division
 import sys
 sys.path.append('core')
 
 import argparse
 import os
-import cv2
-import time
 import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 
 from torch.utils.data.dataloader import DataLoader
-from loader.loader_mvsec_gnn import MVSEC20hz_outdoor_day1
 from model.eraft import ERAFT
 import pytorch_lightning as pl
 
 from loader.utils import dsec_collate_fn
 from loader.loader_dsec_gnn import EraftLoader
 
-# from torch.utils.tensorboard import SummaryWriter
 
 # exclude extremly large displacements
 MAX_FLOW = 400
@@ -33,26 +27,28 @@ VAL_FREQ = 5000
 class EraftTrainer(pl.LightningModule):
     def __init__(self, args) -> None:
         super().__init__()
-        self.model = ERAFT(args.n_graph_feat)
         self.args = args
         self.config = {}
-        self.config['subtype'] = str('standard')
+        self.config['subtype'] = 'standard'
         # self.automatic_optimization = False
-
+        self.model= ERAFT(
+                    config=self.config, 
+                    n_first_channels=15
+                )
     def training_step(self, batch, batch_idx):
         # optimizer = self.optimizers()
         # # scheduler = self.lr_schedulers()
         # optimizer.zero_grad()
         # self.model.train()
 
-        graph_data, gt = batch
+        event_data, gt = batch
 
         flow = gt[:,0]
         valid = gt[:,1]
         
         # flow = torch.unsqueeze(flow, dim=0)      # for batch stuff    
         # valid = torch.unsqueeze(valid, dim=0)    # for batch stuff
-        _, flow_predictions = self.model(graph_data, flow, iters=self.args.iters)            
+        _, flow_predictions = self.model(event_data[:,0],event_data[:,1])            
 
         loss, metrics = self.sequence_loss(flow_predictions, flow, valid, self.args.gamma)
         # self.manual_backward(loss)
@@ -61,24 +57,23 @@ class EraftTrainer(pl.LightningModule):
         # optimizer.step()
         # scheduler.step()
         metrics = {f'{key}_train': value for key, value in metrics.items()}
-        self.log_dict(metrics, prog_bar=True)
+        self.log_dict(metrics, prog_bar=True, batch_size=1)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
 
         # self.model.eval()
-        graph_data, gt = batch
+        event_data, gt = batch
 
         flow = gt[:,0]
         valid = gt[:,1]
-
-        # with torch.no_grad():
-        _, flow_predictions = self.model(graph_data, flow, iters=self.args.iters)            
+        
+        _, flow_predictions = self.model(event_data[:,0],event_data[:,1])            
 
         loss, metrics = self.sequence_loss(flow_predictions, flow, valid, self.args.gamma)
         metrics = {f'{key}_val': value for key, value in metrics.items()}
-        self.log_dict(metrics, prog_bar=True)
+        self.log_dict(metrics, prog_bar=True, batch_size=1)
         
         return loss
    
@@ -139,13 +134,13 @@ if __name__ == '__main__':
     parser.add_argument('--epsilon', type=float, default=1e-8)
     parser.add_argument('--clip', type=float, default=1.0)
     parser.add_argument('--dropout', type=float, default=0.0)
-    parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
+    parser.add_argument('--gamma', type=float, default=0.7, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
 
     parser.add_argument('--n_graph_feat', type=int, default=4, help='number of input graph features')
 
     args = parser.parse_args()
-
+    # print('gamma = ' + str(args.gamma) + ', clip_val = ' + str(args.clip))
     torch.manual_seed(1234)
     np.random.seed(1234)
 
@@ -153,29 +148,49 @@ if __name__ == '__main__':
         os.mkdir('checkpoints')
 
     data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_01_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_c'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_a')]
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_d'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_03_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_06_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_07_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_08_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_09_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_10_a'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_c')]
     seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_01_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_c'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_05_a')]
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_d'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_03_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_05_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_06_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_07_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_08_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_09_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_10_a'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_c')]
     
-    val_data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_a')]
-    val_seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_a')]
+    val_data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_a'),
+                     Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_b'),
+                     Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_10_b'),
+                     Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_a')]
+    val_seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_a'),
+                    Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_05_b'),
+                    Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_10_b'),
+                    Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_a')]
+                     
                      
     data_set = EraftLoader(flow_paths=seq_path, event_paths=data_path)
-    train_loader = DataLoader(data_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=16)
+    train_loader = DataLoader(data_set, batch_size=5, collate_fn=dsec_collate_fn, num_workers=8)
     val_set = EraftLoader(flow_paths=val_seq_path, event_paths=val_data_path)
-    val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=8)
+    val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=4)
 
     trainer = pl.Trainer(
         accelerator="gpu", 
         max_epochs=args.num_steps, 
-        devices=2,
-        # gradient_clip_val=args.clip, 
+        gpus = args.gpus,
+        gradient_clip_val=args.clip, 
         strategy="ddp", 
-        # limit_train_batches=512, 
+        limit_train_batches=0.2,
+        limit_val_batches=0.2, 
         default_root_dir="checkpoints", 
         logger=pl.loggers.CSVLogger('checkpoints'), 
         profiler="advanced"
