@@ -126,7 +126,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_steps', type=int, default=1000)
     parser.add_argument('--batch_size', type=int, default=6)
     parser.add_argument('--image_size', type=int, nargs='+', default=[384, 512])
-    parser.add_argument('--gpus', type=int, nargs='+', default=[0,1])
+    parser.add_argument('--gpus', type=int, nargs='+', default=[1])
     parser.add_argument('--mixed_precision', action='store_true', help='use mixed precision')
 
     parser.add_argument('--iters', type=int, default=12)
@@ -134,7 +134,7 @@ if __name__ == '__main__':
     parser.add_argument('--epsilon', type=float, default=1e-8)
     parser.add_argument('--clip', type=float, default=1.0)
     parser.add_argument('--dropout', type=float, default=0.0)
-    parser.add_argument('--gamma', type=float, default=0.7, help='exponential weighting')
+    parser.add_argument('--gamma', type=float, default=0.8, help='exponential weighting')
     parser.add_argument('--add_noise', action='store_true')
 
     parser.add_argument('--n_graph_feat', type=int, default=4, help='number of input graph features')
@@ -156,7 +156,10 @@ if __name__ == '__main__':
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_08_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_09_a'),
                  Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_10_a'),
-                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_c')]
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_c'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_11_b'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_c'),
+                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_e')]
     seq_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_01_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_d'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_03_a'),
@@ -166,8 +169,11 @@ if __name__ == '__main__':
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_08_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_09_a'),
                 Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_10_a'),
-                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_c')]
-    
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_c'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_11_b'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_c'),
+                Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_optical_flow/zurich_city_02_e')]
+
     val_data_path = [Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_02_a'),
                      Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_05_b'),
                      Path('/media/kucarst3-dlws/HDD3/humais/data/dsec/train_events/zurich_city_10_b'),
@@ -179,9 +185,9 @@ if __name__ == '__main__':
                      
                      
     data_set = EraftLoader(flow_paths=seq_path, event_paths=data_path)
-    train_loader = DataLoader(data_set, batch_size=5, collate_fn=dsec_collate_fn, num_workers=8)
+    train_loader = DataLoader(data_set, batch_size=5, num_workers=8)
     val_set = EraftLoader(flow_paths=val_seq_path, event_paths=val_data_path)
-    val_loader = DataLoader(val_set, batch_size=1, collate_fn=dsec_collate_fn, num_workers=4)
+    val_loader = DataLoader(val_set, batch_size=1, num_workers=4)
 
     trainer = pl.Trainer(
         accelerator="gpu", 

@@ -53,10 +53,12 @@ def make_graph_from_voxel(grid: torch.Tensor, gt=None, k=8):
     val = torch.tensor(grid[mask].numpy()).float().reshape(-1, 1)
     feature = torch.hstack((x,y,t,val))
     pos = torch.hstack((t,x,y))
-    edge_index = knn_graph(pos, k=k)
+    # edge_index = knn_graph(pos, k=k)
+    edge_index = radius_graph(pos, r=7, max_num_neighbors=16,flow='source_to_target')
     y = torch.tensor(gt)[None, :] if not gt is None else gt
 
-    graph = Data(x=feature, edge_index=edge_index, pos=pos, y=y)
+    # graph = Data(x=feature, edge_index=edge_index, pos=pos, y=y)
+    graph = Data(x=val, edge_index=edge_index, pos=pos, y=y)
     graph = Cartesian()(graph)
     return graph 
 class EventSequence(object):

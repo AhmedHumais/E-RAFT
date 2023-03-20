@@ -415,7 +415,7 @@ class EraftLoader(Dataset):
         # Save output dimensions
         self.height = 480
         self.width = 640
-        self.voxel_grid = VoxelGrid((64,self.height, self.width), normalize=True)
+        self.voxel_grid = VoxelGrid((15,self.height, self.width), normalize=True)
 
         # Save delta timestamp in ms
         self.delta_t_us = delta_t_ms * 1000
@@ -560,14 +560,14 @@ class EraftLoader(Dataset):
         ts_end = [t_i, t_i + self.delta_t_us]
 
         for i in range(len(names)):
-            event_data = self.event_slicer.get_events(ts_start[i], ts_end[i])
+            event_data = (self.folders[folder_idx]['event_slicer']).get_events(ts_start[i], ts_end[i])
 
             p = event_data['p']
             t = event_data['t']
             x = event_data['x']
             y = event_data['y']
 
-            xy_rect = self.rectify_events(x, y)
+            xy_rect = self.rectify_events(x, y, self.folders[folder_idx]['rectify_ev_map'])
             x_rect = xy_rect[:, 0]
             y_rect = xy_rect[:, 1]
 
@@ -584,7 +584,7 @@ class EraftLoader(Dataset):
             if self.voxel_grid is None:
                 raise NotImplementedError
             else:
-                event_representation = self.events_to_voxel_grid(p, t, x_rect, y_rect)
+                event_representation = self.events_to_voxel_grid(self.voxel_grid, p, t, x_rect, y_rect)
                 output[names[i]] = event_representation
 
         return output
